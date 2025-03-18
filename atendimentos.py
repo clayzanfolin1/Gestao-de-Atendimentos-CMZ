@@ -105,7 +105,7 @@ class AtendimentoApp:
         if platform.system() == "Linux":
             # No Linux/macOS, usa a pasta home com um ponto no início
             self.base_dir = Path.home() / ".cmz-atendimentos-teste" #CMZ
-            #self.base_dir = Path.home() / "Trabalho" / "Marcelo"/ "chamados" /"cmz-atendimentos" #millan
+            
         else:
             # No Windows, usa a pasta AppData\Local
             self.base_dir = Path.home() / "AppData" / "Local" / "cmz-atendimentos"
