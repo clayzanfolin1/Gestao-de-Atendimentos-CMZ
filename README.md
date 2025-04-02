@@ -1,4 +1,4 @@
-# Gestao-de-Atendimentos-CMZ
+# Gestao de Atendimentos CMZ
 Software para gestão de atendimentos de clientes
 
 Este programa foi desenvolvido para facilitar a minha vida, projetado para ajudar nas minhas necessidades, pode ser que também sejam as suas ou você possa evoluí-lo e acrescentar as suas necessidades também, já que a base já criei e código está sobre Licença Pública Geral GNU versão 2.0.
