@@ -538,7 +538,7 @@ class AtendimentoApp:
         # Adiciona as funcionalidades de selecionar tudo e menu de contexto
         self.adicionar_funcionalidades_texto(self.dados_usuario_text)  # Usar self para chamar o método
 
-        # Bind text modification to save
+        # Vincular modificação de texto para salvar
         self.dados_usuario_text.bind("<KeyRelease>", self.salvar_dados_usuario)
 
     def salvar_dados_usuario(self, event=None):
@@ -771,10 +771,10 @@ class AtendimentoApp:
 
         # Botões empilhados verticalmente
         ttk.Button(btn_frame, text="Adicionar Cliente", width=16, command=self.adicionar_cliente).pack(
-            side=tk.TOP, fill=tk.X, pady=2  # Alterado para TOP e fill X
+            side=tk.TOP, fill=tk.X, pady=2  
         )
         ttk.Button(btn_frame, text="Iniciar Cliente", width=5, command=self.selecionar_cliente).pack(
-            side=tk.TOP, fill=tk.X, pady=2  # Alterado para TOP e fill X
+            side=tk.TOP, fill=tk.X, pady=2  
         )
 
     def atualizar_usuarios_combobox(self, event=None):
@@ -1247,7 +1247,7 @@ class AtendimentoApp:
             )
 
             # Atualiza o estado para "em_andamento"
-            self.estado_atual = ESTADOS[1]  # "em_andamento"
+            self.estado_atual = ESTADOS[1] 
 
             # Atualiza a interface e salva o estado
             self.atualizar_interface_atendimento()
@@ -1529,13 +1529,13 @@ class AtendimentoApp:
             with open(arquivo_selecao, 'r', encoding='utf-8') as f:
                 dados = json.load(f)
 
-            # Estratégia 1: Tentar encontrar pelo item_id (se ainda existir)
+            # Tentativa 1: Tentar encontrar pelo item_id (se ainda existir)
             item_id = dados.get('item_id', '')
             if item_id and self.tree.exists(item_id):
                 self.selecionar_item(item_id)
                 return
 
-            # Estratégia 2: Busca exata por cliente, data e hash
+            # Tentativa 2: Busca exata por cliente, data e hash
             hash_original = dados.get('hash', '')
             cliente_alvo = dados.get('cliente_usuario', '')
             data_alvo = dados.get('data', '')
@@ -1555,7 +1555,7 @@ class AtendimentoApp:
                                 self.selecionar_item(item)
                                 return
 
-            # Estratégia 3: Busca apenas pelo cliente
+            # Tentativa 3: Busca apenas pelo cliente
             if cliente_alvo:
                 for item in self.tree.get_children():
                     valores = self.tree.item(item, 'values')
@@ -1563,7 +1563,7 @@ class AtendimentoApp:
                         self.selecionar_item(item)
                         return
 
-            # Estratégia 4: Seleciona o primeiro item se disponível
+            # Tentativa 4: Seleciona o primeiro item se disponível
             items = self.tree.get_children()
             if items:
                 self.selecionar_item(items[0])
@@ -1573,7 +1573,7 @@ class AtendimentoApp:
 
     def carregar_historico(self):
         """Carrega o histórico e restaura a seleção baseada no arquivo"""
-        # 1. Primeiro carregamos todo o conteúdo normalmente
+        # Primeiro carregamos todo o conteúdo normalmente
         ano = self.ano_combobox.get()
         mes = self.mes_combobox.get().lower()
 
@@ -1709,7 +1709,7 @@ class AtendimentoApp:
         if not selecao_anterior:
             return
 
-        # Estratégia 1: Tentar encontrar o mesmo item pelo cliente e data
+        # Método 1: Tentar encontrar o mesmo item pelo cliente e data
         if selecao_anterior.get('cliente') and selecao_anterior.get('data'):
             for item in self.tree.get_children():
                 valores = self.tree.item(item, 'values')
@@ -1719,7 +1719,7 @@ class AtendimentoApp:
                     self.selecionar_item(item)
                     return
 
-        # Estratégia 2: Tentar encontrar apenas pelo cliente
+        # Método 2: Tentar encontrar apenas pelo cliente
         if selecao_anterior.get('cliente'):
             for item in self.tree.get_children():
                 valores = self.tree.item(item, 'values')
@@ -1727,7 +1727,7 @@ class AtendimentoApp:
                     self.selecionar_item(item)
                     return
 
-        # Estratégia 3: Selecionar o primeiro item se disponível
+        # Método 3: Selecionar o primeiro item se disponível
         items = self.tree.get_children()
         if items:
             self.selecionar_item(items[0])
@@ -1891,7 +1891,6 @@ class AtendimentoApp:
         )
         remove_button.pack(side=tk.LEFT, padx=5)
 
-        # Adicione este botão junto com os outros botões no btn_frame
         ttk.Button(
             btn_frame,
             text="Copiar dados do atendimento",
@@ -1987,7 +1986,7 @@ class AtendimentoApp:
         detalhes_window.edit_button = edit_button
         detalhes_window.save_button = save_button
 
-        # Configura atalhos para esta janela
+        # Configura atalhos para janela
         self.configurar_atalhos_janela(
             detalhes_window,
             [problema_entry, tarefa_entry, eventos_text]
@@ -2340,8 +2339,8 @@ class AtendimentoApp:
             self.janela_espelhamentos.title(f"Espelhamentos - {cliente} - {usuario}")
             self.janela_espelhamentos.geometry("800x600")
 
-            # Configura para fechar corretamente a janela - CORREÇÃO AQUI
-            self.janela_espelhamentos.protocol("WM_DELETE_WINDOW", self.fechar_janela_espelhamentos)  # "espelhamentos" em vez de "espelhameto"
+            # Configura para fechar corretamente a janela
+            self.janela_espelhamentos.protocol("WM_DELETE_WINDOW", self.fechar_janela_espelhamentos)
 
             # Frame principal
             main_frame = ttk.Frame(self.janela_espelhamentos)
@@ -2478,7 +2477,7 @@ class AtendimentoApp:
 
         mostrar_sucesso(self.janela_espelhamentos, "Snapshot removido com sucesso e os demais foram renumerados!")
 
-    def fechar_janela_espelhamentos(self):  # Certifique-se que este método existe
+    def fechar_janela_espelhamentos(self):
         """Fecha a janela de espelhamentos corretamente"""
         if hasattr(self, 'janela_espelhamentos') and self.janela_espelhamentos is not None:
             self.janela_espelhamentos.destroy()
