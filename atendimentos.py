@@ -5,7 +5,7 @@ import copy
 from datetime import datetime, date, time, timedelta
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox, scrolledtext, simpledialog
 import platform
 import locale
 import hashlib
@@ -98,6 +98,10 @@ class AtendimentoApp:
         self.root.protocol("WM_DELETE_WINDOW", self.ao_fechar_janela)
         #self.root.geometry("1200x800")
 
+        # Configuração adicional para estilização no Linux
+        if platform.system() == "Linux":
+            self.configurar_estilo_menu_linux()
+
         # Ajusta o tamanho e a posição da janela
         self.ajustar_tamanho_posicao_janela()
 
@@ -110,8 +114,7 @@ class AtendimentoApp:
         # Define a pasta base de acordo com o sistema operacional
         if platform.system() == "Linux":
             # No Linux/macOS, usa a pasta home com um ponto no início
-            self.base_dir = Path.home() / ".cmz-atendimentos" #CMZ
-            #self.base_dir = Path.home() / "Trabalho" / "Marcelo"/ "chamados" /"cmz-atendimentos" #millan
+            self.base_dir = Path.home() / ".cmz-atendimentos"
         else:
             # No Windows, usa a pasta AppData\Local
             self.base_dir = Path.home() / "AppData" / "Local" / "cmz-atendimentos"
@@ -132,6 +135,9 @@ class AtendimentoApp:
         # Carrega as configurações da janela
         self.carregar_configuracoes_janela()
 
+        # Carrega as configurações das colunas do histórico
+        self.carregar_configuracoes_colunas()
+
         # Configura o locale para português do Brasil
         configurar_locale_pt_br()
 
@@ -140,6 +146,9 @@ class AtendimentoApp:
 
         # Ordena os arquivos ao iniciar
         self.ordenar_arquivos_alfabeticamente()
+
+        # Verifica/carrega o número do operador
+        self.verificar_operador()
 
         # Criação do menu superior
         self.criar_menu_superior()
@@ -153,11 +162,16 @@ class AtendimentoApp:
         # Cria as pastas do ano e do mês corrente, se não existirem
         self.criar_pasta_ano_mes_corrente()
 
+        # Configurar o redimensionamento responsivo
+        self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_rowconfigure(0, weight=1)
+
         # Referência à janela de anotações
         self.janela_anotacoes = None
 
         # Referência à janela de espelhamentos
         self.janela_espelhamentos = None
+
 
         self.estado_atual = ESTADOS[0]
         self.eventos = []
@@ -175,6 +189,17 @@ class AtendimentoApp:
         self.carregar_atendimentos_abertos()
         self.carregar_tmp_atendimentos()
         self.limpar_atendimentos_invalidos()
+
+        # Definir colunas do histórico ANTES de criar os widgets
+        self.colunas = [
+            ("Cliente", 220, 220, True),    # Nome, largura inicial, largura mínima, redimensionável
+            ("Data", 80, 80, False),       # Coluna Data fixa
+            ("Problema", 220, 220, True),
+            ("Tarefa", 170, 170, True),
+            ("Tempo", 80, 80, False),      # Coluna Tempo fixa
+        ]
+
+
         self.criar_widgets_principais()
         self.criar_backup()
 
@@ -373,33 +398,54 @@ class AtendimentoApp:
     def criar_menu_superior(self):
         menubar = tk.Menu(self.root)
 
-        # Botão "Diretório"
+        # Itens do menu normais
         menubar.add_command(label="Diretório", command=self.abrir_diretorio)
-
-        # Botão "Espelhamentos"
         menubar.add_command(label="Espelhamentos", command=self.criar_janela_espelhamentos)
-
-        # Novo botão "Anotações"
         menubar.add_command(label="Anotações", command=self.criar_janela_anotacoes)
-
-        # Botão "Sobre"
+        menubar.add_command(label="Alterar Operador", command=self.alterar_operador)
         menubar.add_command(label="Sobre", command=self.mostrar_sobre)
 
-        # Configura o menu na janela principal
         self.root.config(menu=menubar)
 
-        # Cria um Frame para a barra de ferramentas (toolbar)
-        toolbar = tk.Frame(self.root)  # Use tk.Frame em vez de ttk.Frame
+        # Barra de ferramentas com o operador destacado
+        toolbar = tk.Frame(self.root, bg='lightgray')
         toolbar.pack(side=tk.TOP, fill=tk.X)
 
-        # Adiciona o botão de controle da hora automática à toolbar
-        self.botao_hora_automatica = tk.Button(  # Use tk.Button em vez de ttk.Button
+        # Botão da hora automática
+        self.botao_hora_automatica = tk.Button(
             toolbar,
             text="Desligar Hora Automática",
             command=self.alternar_hora_automatica,
-            foreground="black"  # Cor padrão do texto
+            foreground="black",
+            bg='lightgray'
         )
         self.botao_hora_automatica.pack(side=tk.LEFT, padx=5, pady=2)
+
+        # Botão de atendimento presencial
+        self.botao_atendimento_presencial = tk.Button(
+            toolbar,
+            text="Atendimento Presencial",
+            command=self.alternar_atendimento_presencial,
+            foreground="black",
+            bg='lightgray'
+        )
+        self.botao_atendimento_presencial.pack(side=tk.LEFT, padx=5, pady=2)
+
+        # Label do operador (estilizado)
+        self.operador_label = tk.Label(
+            toolbar,
+            text=f"Operador: {getattr(self, 'numero_operador', 'Não definido')}",
+            fg='green',
+            bg='lightgray',
+            font=('Helvetica', 10, 'bold'),
+            padx=10
+        )
+        self.operador_label.pack(side=tk.RIGHT)
+
+    def atualizar_operador_label(self):
+        """Atualiza o label do operador na toolbar"""
+        if hasattr(self, 'operador_label'):
+            self.operador_label.config(text=f"Operador: {self.numero_operador}")
 
     def abrir_diretorio(self):
         """
@@ -412,14 +458,53 @@ class AtendimentoApp:
         else:
             messagebox.showerror("Erro", "Sistema operacional não suportado.")
 
+    def obter_proximo_numero_atendimento(self):
+        """Obtém o próximo número de atendimento e atualiza o contador"""
+        contador_path = self.config_dir / "contador_atendimentos.txt"
+
+        try:
+            if contador_path.exists():
+                with open(contador_path, "r", encoding="utf-8") as f:
+                    numero = int(f.read().strip())
+            else:
+                numero = 1  # Começa do 1 se o arquivo não existir
+        except (ValueError, FileNotFoundError):
+            numero = 1  # Se houver erro, começa do 1
+
+        # Salva o próximo número para uso futuro
+        with open(contador_path, "w", encoding="utf-8") as f:
+            f.write(str(numero + 1))
+
+        return f"{self.numero_operador} - {numero:02d}"  # Formato: "operador - numero"
+
     def mostrar_sobre(self):
         """
         Exibe uma caixa de mensagem com informações sobre o desenvolvedor, licença e versão do software.
         """
         sobre_texto = (
-            "Desenvolvedor: Clayton Magalhães Zanfolin  \n\n" "Direitos de uso: Licença Pública Geral GNU versão 2.0   \n\n" "Versão: 1.6   "
+            "Desenvolvedor: Clayton Magalhães Zanfolin  \n\n" "Direitos de uso: Licença Pública Geral GNU versão 2.0   \n\n" "Versão: 1.7.1   "
         )
         messagebox.showinfo("Sobre", sobre_texto)
+
+    def alternar_atendimento_presencial(self):
+        # Alterna o estado do atendimento presencial
+        if not hasattr(self, 'atendimento_presencial'):
+            self.atendimento_presencial = False
+
+        self.atendimento_presencial = not self.atendimento_presencial
+
+        if self.atendimento_presencial:
+            # Ativa o modo presencial
+            self.botao_atendimento_presencial.config(foreground="red")
+            # Desativa a hora automática
+            if self.hora_automatica:
+                self.alternar_hora_automatica()
+        else:
+            # Desativa o modo presencial
+            self.botao_atendimento_presencial.config(foreground="black")
+            # Ativa a hora automática se estiver desligada
+            if not self.hora_automatica:
+                self.alternar_hora_automatica()
 
     def carregar_clientes(self):
         clientes_file = self.base_dir / "clientes.txt"
@@ -540,6 +625,82 @@ class AtendimentoApp:
 
         # Vincular modificação de texto para salvar
         self.dados_usuario_text.bind("<KeyRelease>", self.salvar_dados_usuario)
+
+    def carregar_operador(self):
+        """Carrega o número do operador do arquivo"""
+        operador_path = self.config_dir / "operador.txt"
+        try:
+            if operador_path.exists():
+                with open(operador_path, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            return None
+        except Exception:
+            return None
+
+    def solicitar_operador(self):
+        """Solicita ao usuário que informe seu número de operador"""
+        while True:
+            operador = simpledialog.askstring("Operador",
+                                            "Informe seu dado de operador:",
+                                            parent=self.root)
+            if operador and operador.strip():
+                operador_path = self.config_dir / "operador.txt"
+                with open(operador_path, "w", encoding="utf-8") as f:
+                    f.write(operador.strip())
+                return operador.strip()
+            else:
+                messagebox.showwarning("Operador inválido", "O campo do operador não pode ser vazio!")
+
+    def atualizar_display_operador(self):
+        """Atualiza o display do operador no menu superior"""
+        if hasattr(self, 'numero_operador'):
+            # Obtém o menu atual
+            menubar = self.root.config('menu')
+
+            # Se o menu existir, atualiza o item do operador
+            if menubar:
+                # Obtém todos os itens do menu
+                menu_items = menubar.children
+
+                # Procura pelo item do operador (que está desabilitado)
+                for item in menu_items.values():
+                    if isinstance(item, tk.Menu) and item.entrycget(0, 'state') == 'disabled':
+                        item.entryconfig(0, label=f"Operador: {self.numero_operador}")
+                        break
+
+    def alterar_operador(self):
+        novo_operador = simpledialog.askstring("Alterar Operador",
+                                            "Informe o novo dado de operador:",
+                                            parent=self.root)
+        if novo_operador and novo_operador.strip():
+            operador_path = self.config_dir / "operador.txt"
+            with open(operador_path, "w", encoding="utf-8") as f:
+                f.write(novo_operador.strip())
+            self.numero_operador = novo_operador.strip()
+            self.atualizar_operador_label()  # Atualiza o label
+            mostrar_sucesso(self.root, "Operador atualizado com sucesso!")
+
+    def atualizar_menu_operador(self):
+        """Atualiza o display do operador no menu"""
+        menubar = self.root.config('menu')
+        if menubar:
+            # Encontra o item do operador (que está na posição 4, considerando os itens anteriores)
+            try:
+                menubar.entryconfig(4, label=f"Operador: {self.numero_operador}")
+            except:
+                # Se a posição mudou, faz uma busca pelo item desabilitado
+                for i in range(menubar.index('end') + 1):
+                    if menubar.entrycget(i, 'state') == 'disabled':
+                        menubar.entryconfig(i, label=f"Operador: {self.numero_operador}")
+                        break
+
+    def verificar_operador(self):
+        """Verifica e carrega o número do operador"""
+        operador = self.carregar_operador()
+        if not operador:
+            operador = self.solicitar_operador()
+        # Garante que temos um operador válido
+        self.numero_operador = operador if operador else "Não definido"
 
     def salvar_dados_usuario(self, event=None):
         cliente = self.cliente_var.get().strip()
@@ -771,10 +932,10 @@ class AtendimentoApp:
 
         # Botões empilhados verticalmente
         ttk.Button(btn_frame, text="Adicionar Cliente", width=16, command=self.adicionar_cliente).pack(
-            side=tk.TOP, fill=tk.X, pady=2  
+            side=tk.TOP, fill=tk.X, pady=2
         )
         ttk.Button(btn_frame, text="Iniciar Cliente", width=5, command=self.selecionar_cliente).pack(
-            side=tk.TOP, fill=tk.X, pady=2  
+            side=tk.TOP, fill=tk.X, pady=2
         )
 
     def atualizar_usuarios_combobox(self, event=None):
@@ -1247,7 +1408,7 @@ class AtendimentoApp:
             )
 
             # Atualiza o estado para "em_andamento"
-            self.estado_atual = ESTADOS[1] 
+            self.estado_atual = ESTADOS[1]
 
             # Atualiza a interface e salva o estado
             self.atualizar_interface_atendimento()
@@ -1353,17 +1514,53 @@ class AtendimentoApp:
         inicio = next(e for e in self.eventos if e["tipo"] == "inicio")
         data = inicio["data"]
 
+        # Obtém o próximo número de atendimento (já formatado como "operador - numero")
+        numero_atendimento_completo = self.obter_proximo_numero_atendimento()
+
+        # Extrai apenas o número do atendimento (remove o operador)
+        numero_atendimento = numero_atendimento_completo.split(" - ")[-1]
+
+        self.current_atendimento["numero_atendimento"] = numero_atendimento_completo
+
         ano_dir = self.base_dir / str(data.year)
         mes_dir = ano_dir / data.strftime("%B").lower()
         mes_dir.mkdir(parents=True, exist_ok=True)
 
+        # Determina o tipo de atendimento
+        tipo_atendimento = "Presencial" if hasattr(self, 'atendimento_presencial') and self.atendimento_presencial else "Remoto"
+        self.current_atendimento["tipo"] = tipo_atendimento
+
+        # Salva no arquivo todos.txt (mantém o formato original)
         todos_path = mes_dir / "todos.txt"
         with open(todos_path, "a", encoding="utf-8") as f:
             f.write(self.formatar_atendimento(self.current_atendimento))
 
+        # Salva no arquivo do cliente (mantém o formato original)
         cliente_path = mes_dir / f"{self.current_atendimento['cliente']}.txt"
         with open(cliente_path, "a", encoding="utf-8") as f:
             f.write(self.formatar_atendimento(self.current_atendimento))
+
+        # Cria ou atualiza o arquivo status.txt com o novo formato
+        status_path = mes_dir / "status.txt"
+        status_entry = (
+            "**********************************\n"
+            f"Cadastro do Operador: {self.numero_operador}\n"
+            f"Número do atendimento: {numero_atendimento}\n"  # Agora só o número
+            f"Situação: Não Processado\n"
+            f"Tipo: {tipo_atendimento}\n"
+            "**********************************\n\n"
+        )
+
+        # Verifica se o arquivo já existe para evitar duplicatas
+        if status_path.exists():
+            with open(status_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                if numero_atendimento not in content:  # Evita duplicar entradas
+                    with open(status_path, "a", encoding="utf-8") as f:
+                        f.write(status_entry)
+        else:
+            with open(status_path, "w", encoding="utf-8") as f:
+                f.write(status_entry)
 
     def salvar_atendimento_aberto(self):
         self.salvar_atendimento_temporario()
@@ -1381,24 +1578,30 @@ class AtendimentoApp:
         for evento in atendimento["eventos"]:
             data_str = evento["data"].strftime("%d/%m/%Y")
             hora_str = evento["hora"].strftime("%H:%M")
-            eventos_str.append(f"{evento['tipo'].upper()}: {data_str} {hora_str}")
+            # Sempre formata como INÍCIO (com acento) no arquivo
+            tipo = "INÍCIO" if evento["tipo"] == "inicio" else evento["tipo"].upper()
+            eventos_str.append(f"{tipo}: {data_str} {hora_str}")
 
-        # Garante que tempo_total existe e é um timedelta
-        tempo_total = atendimento.get("tempo_total", timedelta())
+        # Restante da função permanece igual...
+        tempo_total = atendimento.get('tempo_total', timedelta())
         if not isinstance(tempo_total, timedelta):
             tempo_total = timedelta()
 
         horas = int(tempo_total.total_seconds() // 3600)
         minutos = int((tempo_total.total_seconds() % 3600) // 60)
 
+        tipo_atendimento = atendimento.get("tipo", "Remoto")
+
         return (
             "**********************************\n"
+            f"Atendente - Nº do Atendimento: {atendimento.get('numero_atendimento', 'N/A')}\n"
+            f"Tipo: {tipo_atendimento}\n"
             f"Nome do Cliente: {atendimento['cliente']}\n"
             f"Usuário: {atendimento.get('usuario', '')}\n\n"
             f"Problema a resolver: {atendimento['problema']}\n\n"
             f"Tarefa realizada: {atendimento['tarefa']}\n\n"
             "Histórico de Eventos:\n" + "\n".join(eventos_str) + "\n\n"
-            f"Tempo Total: {horas:02d}:{minutos:02d}\n"
+            f"Tempo Total: {horas:02d}:{minutos:02d}\n\n"
             "**********************************\n\n"
         )
 
@@ -1412,7 +1615,6 @@ class AtendimentoApp:
         raise TypeError(f"Tipo não serializável: {type(obj)}")
 
     def criar_secao_historico(self, parent):
-
         # Cria um estilo para a Treeview com fonte maior
         style = ttk.Style()
         style.configure("Treeview", font=('Liberation Serif', 11))
@@ -1436,31 +1638,104 @@ class AtendimentoApp:
             side=tk.LEFT
         )
 
-        self.tree = ttk.Treeview(
-            frame,
-            columns=("Cliente", "Data", "Problema", "Tarefa", "Tempo"),
-            show="headings",
+        # Adiciona um separador entre os botões
+        ttk.Separator(nav_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=5, fill=tk.Y)
+
+        # Adiciona o novo botão Detalhes
+        ttk.Button(nav_frame, text="Detalhes", command=self.abrir_detalhes_selecionado).pack(
+            side=tk.LEFT
         )
-        self.tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        colunas = [
-            ("Cliente", 190),
-            ("Data", 40),
-            ("Problema", 190),
-            ("Tarefa", 140),
-            ("Tempo", 40),
+        # Frame para conter a Treeview e as barras de rolagem
+        tree_frame = ttk.Frame(frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Configurar pesos para expansão
+        tree_frame.grid_columnconfigure(0, weight=1)
+        tree_frame.grid_rowconfigure(0, weight=1)
+
+        # Barra de rolagem vertical
+        yscroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
+        yscroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Barra de rolagem horizontal
+        xscroll = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL)
+        xscroll.pack(side=tk.BOTTOM, fill=tk.X)
+
+        # Define as colunas antes de criar a Treeview
+        self.colunas = [
+            ("Cliente", 220, 220, True),    # Nome, largura inicial, largura mínima, redimensionável
+            ("Data", 80, 80, False),       # Coluna Data fixa
+            ("Problema", 220, 220, True),
+            ("Tarefa", 170, 170, True),
+            ("Tempo", 80, 80, False),      # Coluna Tempo fixa
         ]
-        for col, width in colunas:
+
+        self.tree = ttk.Treeview(
+            tree_frame,
+            columns=[col[0] for col in self.colunas],
+            show="headings",
+            yscrollcommand=yscroll.set,
+            xscrollcommand=xscroll.set
+        )
+        self.tree.pack(fill=tk.BOTH, expand=True)
+
+        # Configuração das colunas
+        for col, width, minwidth, resizable in self.colunas:
             self.tree.heading(col, text=col)
-            self.tree.column(col, width=width, anchor=tk.W)
+            if resizable:
+                self.tree.column(col, width=width, anchor=tk.W, stretch=True, minwidth=minwidth)
+            else:
+                self.tree.column(col, width=width, anchor=tk.W, stretch=False, minwidth=width)
 
-        scroll = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.tree.yview)
-        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        # Configura tags para diferentes estados
+        self.tree.tag_configure('processado', foreground='green')
+        self.tree.tag_configure('aberto', foreground='red', font=('Helvetica', 10, 'bold'))
+
+        # Configurar redimensionamento de colunas
+        self.tree.bind("<ButtonRelease-1>", self.salvar_larguras_colunas)
+        self.tree.bind("<B1-Motion>", self.salvar_larguras_colunas)
+
         self.tree.bind("<<TreeviewSelect>>", self.atualizar_selecao_historico)
-        self.tree.configure(yscrollcommand=scroll.set)
-
         self.tree.bind("<Double-1>", self.visualizar_detalhes)
         self.atualizar_navegacao_temporal()
+
+        # Carregar configurações salvas das colunas
+        self.carregar_configuracoes_colunas()
+
+    def carregar_configuracoes_colunas(self):
+        """Carrega as larguras das colunas salvas, respeitando os mínimos"""
+        if not hasattr(self, 'colunas'):
+            return  # Se colunas não foi definido ainda, ignora
+
+        colunas_path = self.config_dir / "colunas_historico.json"
+        try:
+            if colunas_path.exists():
+                with open(colunas_path, "r", encoding="utf-8") as f:
+                    colunas_config = json.load(f)
+                    for col, config in colunas_config.items():
+                        # Encontra a configuração desta coluna
+                        col_config = next((c for c in self.colunas if c[0] == col), None)
+                        if col_config:
+                            # Usa o maior valor entre o salvo e o mínimo
+                            width = max(config['width'], col_config[2])
+                            self.tree.column(col, width=width)
+        except Exception as e:
+            print(f"Erro ao carregar configurações das colunas: {e}")
+
+    def salvar_larguras_colunas(self, event=None):
+        """Salva as larguras atuais das colunas"""
+        colunas_path = self.config_dir / "colunas_historico.json"
+        try:
+            colunas_config = {}
+            for col in self.tree["columns"]:
+                width = self.tree.column(col, 'width')
+                colunas_config[col] = {'width': width}
+
+            with open(colunas_path, "w", encoding="utf-8") as f:
+                json.dump(colunas_config, f, indent=2)
+        except Exception as e:
+            print(f"Erro ao salvar configurações das colunas: {e}")
 
     def atualizar_navegacao_temporal(self):
         # Obtém o ano e o mês atuais
@@ -1489,38 +1764,24 @@ class AtendimentoApp:
         self.mes_combobox.set(mes_atual)
 
     def salvar_selecao_atual(self, event=None):
-        """Versão melhorada com mais informações"""
+        """Salva a seleção atual usando o número do atendimento como identificador"""
         selecionados = self.tree.selection()
         if not selecionados:
             return
 
         item = selecionados[0]
-        valores = self.tree.item(item, 'values')
+        index = self.tree.index(item)
 
-        if not valores or len(valores) < 2:  # Pelo menos cliente e data
-            return
+        if index < len(self.current_historico):
+            atendimento = self.current_historico[index]
+            numero_atendimento = atendimento.get("numero_atendimento", "")
 
-        try:
-            # Captura todas as informações necessárias
-            dados = {
-                'item_id': item,
-                'cliente_usuario': valores[0],
-                'data': valores[1],
-                'problema': valores[2] if len(valores) > 2 else '',
-                'tarefa': valores[3] if len(valores) > 3 else '',
-                'tempo': valores[4] if len(valores) > 4 else '',
-                'timestamp': datetime.now().isoformat(),
-                'hash': hashlib.md5(''.join(valores).encode('utf-8')).hexdigest()
-            }
-
-            with open(self.config_dir / "ultima_selecao.json", 'w', encoding='utf-8') as f:
-                json.dump(dados, f, indent=2)
-
-        except Exception as e:
-            print(f"Erro ao salvar seleção detalhada: {e}")
+            if numero_atendimento:
+                with open(self.config_dir / "ultima_selecao.json", 'w', encoding='utf-8') as f:
+                    json.dump({"numero_atendimento": numero_atendimento}, f)
 
     def carregar_ultima_selecao(self):
-        """Versão melhorada com múltiplas estratégias de matching"""
+        """Carrega a última seleção usando o número do atendimento como identificador"""
         try:
             arquivo_selecao = self.config_dir / "ultima_selecao.json"
             if not arquivo_selecao.exists():
@@ -1528,51 +1789,60 @@ class AtendimentoApp:
 
             with open(arquivo_selecao, 'r', encoding='utf-8') as f:
                 dados = json.load(f)
+                numero_atendimento = dados.get("numero_atendimento", "")
 
-            # Tentativa 1: Tentar encontrar pelo item_id (se ainda existir)
-            item_id = dados.get('item_id', '')
-            if item_id and self.tree.exists(item_id):
-                self.selecionar_item(item_id)
-                return
+                if not numero_atendimento:
+                    return
 
-            # Tentativa 2: Busca exata por cliente, data e hash
-            hash_original = dados.get('hash', '')
-            cliente_alvo = dados.get('cliente_usuario', '')
-            data_alvo = dados.get('data', '')
-
-            if cliente_alvo and data_alvo:
-                for item in self.tree.get_children():
-                    valores = self.tree.item(item, 'values')
-                    if valores and len(valores) >= 2:
-                        if valores[0] == cliente_alvo and valores[1] == data_alvo:
-                            if hash_original:
-                                # Verifica o hash se existir
-                                current_hash = hashlib.md5(''.join(valores).encode('utf-8')).hexdigest()
-                                if current_hash == hash_original:
-                                    self.selecionar_item(item)
-                                    return
-                            else:
-                                self.selecionar_item(item)
-                                return
-
-            # Tentativa 3: Busca apenas pelo cliente
-            if cliente_alvo:
-                for item in self.tree.get_children():
-                    valores = self.tree.item(item, 'values')
-                    if valores and valores[0] == cliente_alvo:
-                        self.selecionar_item(item)
+                # Procura pelo atendimento com o número correspondente
+                for i, atendimento in enumerate(self.current_historico):
+                    if atendimento.get("numero_atendimento", "") == numero_atendimento:
+                        # Seleciona o item correspondente na treeview
+                        if i < len(self.tree.get_children()):
+                            item = self.tree.get_children()[i]
+                            self.tree.selection_set(item)
+                            self.tree.focus(item)
+                            self.tree.see(item)
                         return
 
-            # Tentativa 4: Seleciona o primeiro item se disponível
-            items = self.tree.get_children()
-            if items:
-                self.selecionar_item(items[0])
-
         except Exception as e:
-            print(f"Erro ao carregar seleção detalhada: {e}")
+            print(f"Erro ao carregar seleção: {e}")
+
+    def verificar_status_atendimento(self, atendimento):
+        """Verifica o status de um atendimento no arquivo status.txt"""
+        # Obtém apenas o número do atendimento (remove o operador)
+        numero_atendimento_completo = atendimento.get('numero_atendimento', '')
+        if not numero_atendimento_completo:
+            return "Não Processado"  # Padrão para atendimentos antigos
+
+        numero_atendimento = numero_atendimento_completo.split(' - ')[-1]
+
+        # Obtém o caminho do arquivo status.txt
+        data_inicio = atendimento["eventos"][0]["data"]
+        ano_dir = self.base_dir / str(data_inicio.year)
+        mes_dir = ano_dir / data_inicio.strftime("%B").lower()
+        status_path = mes_dir / "status.txt"
+
+        if not status_path.exists():
+            return "Não Processado"
+
+        with open(status_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Divide o conteúdo em blocos de atendimento
+        blocos = content.split("**********************************\n")
+
+        for bloco in blocos:
+            if f"Número do atendimento: {numero_atendimento}" in bloco:
+                if "Situação: Processado" in bloco:
+                    return "Processado"
+                elif "Situação: Não Processado" in bloco:
+                    return "Não Processado"
+
+        return "Não Processado"
 
     def carregar_historico(self):
-        """Carrega o histórico e restaura a seleção baseada no arquivo"""
+        """Carrega o histórico e aplica cores baseadas no status"""
         # Primeiro carregamos todo o conteúdo normalmente
         ano = self.ano_combobox.get()
         mes = self.mes_combobox.get().lower()
@@ -1605,6 +1875,12 @@ class AtendimentoApp:
                 )
             return
 
+        # Configura a tag para atendimentos processados
+        self.tree.tag_configure('processado', foreground='green')
+        self.tree.tag_configure('aberto', foreground='red', font=('Helvetica', 10, 'bold'))
+        self.tree.tag_configure('presencial', font=('Helvetica', 10, 'bold'))
+        self.tree.tag_configure('presencial_processado', foreground='green', font=('Helvetica', 10, 'bold'))
+
         # Carrega o histórico do arquivo todos.txt
         with open(todos_path, "r", encoding="utf-8") as f:
             atendimentos = self.parse_arquivo_historico(f.read())
@@ -1635,6 +1911,23 @@ class AtendimentoApp:
                 else:
                     tempo_str = "N/A"
 
+                # Verifica o status do atendimento
+                status = self.verificar_status_atendimento(atend)
+                tipo_atendimento = atend.get("tipo", "Remoto").lower()
+
+                # Determina as tags a serem aplicadas
+                tags = []
+
+                if status == "Processado":
+                    if tipo_atendimento == "presencial":
+                        tags.append('presencial_processado')
+                    else:
+                        tags.append('processado')
+                elif not atend.get("finalizado", True):  # Atendimentos em aberto
+                    tags.append('aberto')
+                elif tipo_atendimento == "presencial":
+                    tags.append('presencial')
+
                 self.tree.insert(
                     "",
                     tk.END,
@@ -1645,6 +1938,7 @@ class AtendimentoApp:
                         tarefa_short,
                         tempo_str,
                     ),
+                    tags=tuple(tags) if tags else ()
                 )
 
         # Adiciona atendimentos em aberto do mês atual
@@ -1678,8 +1972,6 @@ class AtendimentoApp:
                     ),
                     tags=("aberto",),
                 )
-
-        self.tree.tag_configure("aberto", foreground="red", font=("Helvetica", 10, "bold"))
 
         # Após carregar todos os itens, restaura a seleção
         self.carregar_ultima_selecao()
@@ -1775,65 +2067,55 @@ class AtendimentoApp:
             if not bloco.strip():
                 continue
 
-            atend = {"eventos": [], "cliente": "", "usuario": "", "problema": "", "tarefa": ""}
+            atend = {
+                "eventos": [],
+                "cliente": "",
+                "usuario": "",
+                "problema": "",
+                "tarefa": "",
+                "numero_atendimento": "N/A",
+                "tipo": "Remoto"
+            }
             lines = [line.strip() for line in bloco.split('\n') if line.strip()]
 
-            # Encontra todas as ocorrências de "Histórico de Eventos:"
-            event_headers = [i for i, line in enumerate(lines) if line == "Histórico de Eventos:"]
-
-            # Separa as linhas em conteúdo e eventos
-            if event_headers:
-                last_header = event_headers[-1]
-                content_lines = lines[:last_header]
-                event_lines = lines[last_header+1:] if last_header+1 < len(lines) else []
-
-                # Processa eventos
-                for line in event_lines:
-                    if any(line.startswith(tipo) for tipo in ["INICIO:", "PAUSA:", "RETOMADA:", "FIM:"]):
-                        partes = line.split()
-                        tipo = partes[0].replace(":", "").lower()
-                        data_str = partes[1]
-                        hora_str = partes[2]
-                        atend["eventos"].append({
-                            "tipo": tipo,
-                            "data": datetime.strptime(data_str, "%d/%m/%Y").date(),
-                            "hora": datetime.strptime(hora_str, "%H:%M").time(),
-                        })
-            else:
-                content_lines = lines
-
-            # Processa conteúdo (incluindo "Histórico de Eventos:" que não são o último)
-            current_field = None
-            for line in content_lines:
-                if line.startswith("Nome do Cliente:"):
-                    current_field = "cliente"
-                    atend[current_field] = line.split(": ", 1)[1] if ": " in line else ""
+            for line in lines:
+                if line.startswith("Atendente - Nº do Atendimento:"):
+                    atend["numero_atendimento"] = line.split(": ", 1)[1].strip() if ": " in line else "N/A"
+                elif line.startswith("Tipo:"):
+                    atend["tipo"] = line.split(": ", 1)[1].strip() if ": " in line else "Remoto"
+                elif line.startswith("Nome do Cliente:"):
+                    atend["cliente"] = line.split(": ", 1)[1].strip() if ": " in line else ""
                 elif line.startswith("Usuário:"):
-                    current_field = "usuario"
-                    atend[current_field] = line.split(": ", 1)[1] if ": " in line else ""
+                    atend["usuario"] = line.split(": ", 1)[1].strip() if ": " in line else ""
                 elif line.startswith("Problema a resolver:"):
-                    current_field = "problema"
-                    atend[current_field] = line.split(": ", 1)[1] if ": " in line else ""
+                    atend["problema"] = line.split(": ", 1)[1].strip() if ": " in line else ""
                 elif line.startswith("Tarefa realizada:"):
-                    current_field = "tarefa"
-                    atend[current_field] = line.split(": ", 1)[1] if ": " in line else ""
-                elif line.startswith("Tempo Total:"):
-                    tempo_str = line.split(": ", 1)[1] if ": " in line else "00:00"
-                    try:
-                        horas, minutos = map(int, tempo_str.split(":"))
-                        atend["tempo_total"] = timedelta(hours=horas, minutes=minutos)
-                    except ValueError:
-                        atend["tempo_total"] = self.calcular_tempo_total_eventos(atend["eventos"])
-                elif current_field in ["problema", "tarefa"]:
-                    atend[current_field] += "\n" + line
+                    atend["tarefa"] = line.split(": ", 1)[1].strip() if ": " in line else ""
+                elif line.startswith("Histórico de Eventos:"):
+                    break
 
-            # Garante tempo_total
+            event_lines = []
+            in_events = False
+            for line in lines:
+                if line.startswith("Histórico de Eventos:"):
+                    in_events = True
+                    continue
+                if in_events and any(line.startswith(tipo) for tipo in ["INÍCIO:", "INICIO:", "PAUSA:", "RETOMADA:", "FIM:"]):
+                    partes = line.split()
+                    tipo = partes[0].replace(":", "").lower()
+                    # Padroniza para "inicio" sem acento internamente
+                    if tipo in ["início", "inicio"]:
+                        tipo = "inicio"
+                    data_str = partes[1]
+                    hora_str = partes[2]
+                    atend["eventos"].append({
+                        "tipo": tipo,
+                        "data": datetime.strptime(data_str, "%d/%m/%Y").date(),
+                        "hora": datetime.strptime(hora_str, "%H:%M").time(),
+                    })
+
             if "tempo_total" not in atend:
                 atend["tempo_total"] = self.calcular_tempo_total_eventos(atend["eventos"])
-
-            # Limpeza final
-            for field in ["cliente", "usuario", "problema", "tarefa"]:
-                atend[field] = atend[field].strip()
 
             if atend["cliente"]:
                 atendimentos.append(atend)
@@ -1844,10 +2126,6 @@ class AtendimentoApp:
         item = self.tree.selection()[0]
         index = self.tree.index(item)
 
-        # Armazena os valores originais para referência futura
-        valores_originais = self.tree.item(item, 'values')
-        self.last_selected_values = valores_originais
-
         if index < len(self.current_historico):
             atendimento = self.current_historico[index]
         else:
@@ -1856,18 +2134,24 @@ class AtendimentoApp:
 
         original_atendimento = copy.deepcopy(atendimento)
 
-        # Armazena o item selecionado antes de abrir os detalhes
-        self.last_selected_item = item
+        # Armazena o número do atendimento
+        numero_atendimento = atendimento.get("numero_atendimento", "")
 
         detalhes_window = tk.Toplevel(self.root)
         detalhes_window.title("Detalhes do Atendimento")
-        detalhes_window.geometry("800x600")
+        detalhes_window.geometry("720x580")
+
+        # Armazena o número do atendimento na janela
+        detalhes_window.numero_atendimento = numero_atendimento
 
         main_frame = ttk.Frame(detalhes_window)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill=tk.X, pady=5)
+
+        # Adiciona uma linha separadora
+        ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
 
         edit_button = ttk.Button(
             btn_frame,
@@ -1900,6 +2184,44 @@ class AtendimentoApp:
         fields_frame = ttk.Frame(main_frame)
         fields_frame.pack(fill=tk.BOTH, expand=True)
 
+        # Adiciona o botão de status
+        self.status_btn = ttk.Button(
+            btn_frame,
+            text="Não Processado",
+            style="Red.TButton",
+            command=lambda: self.alternar_status_atendimento(detalhes_window, original_atendimento)
+        )
+        self.status_btn.pack(side=tk.LEFT, padx=5)
+
+        # Configura o estilo dos botões de status
+        style = ttk.Style()
+        style.configure("Red.TButton", foreground="white", background="red", font=('Helvetica', 10, 'bold'))
+        style.configure("Green.TButton", foreground="white", background="green", font=('Helvetica', 10, 'bold'))
+
+        # Verifica o status atual e configura o botão
+        self.verificar_status_botao(original_atendimento)
+
+        # Adiciona uma linha separadora
+        ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
+
+        # Frame para informações do atendimento (entre botões e campos)
+        info_frame = ttk.Frame(main_frame)
+        info_frame.pack(fill=tk.X, pady=5)
+
+        # Adiciona os campos de informações do atendimento
+        ttk.Label(info_frame, text="Atendente:", font=('Helvetica', 10, 'bold')).grid(row=0, column=0, sticky=tk.W, padx=5)
+        ttk.Label(info_frame, text=atendimento.get('numero_atendimento', 'N/A').split(' - ')[0],
+                font=('Helvetica', 10)).grid(row=0, column=1, sticky=tk.W)
+
+        ttk.Label(info_frame, text="Nº do atendimento:", font=('Helvetica', 10, 'bold')).grid(row=0, column=2, sticky=tk.W, padx=5)
+        ttk.Label(info_frame, text=atendimento.get('numero_atendimento', 'N/A').split(' - ')[-1],
+                font=('Helvetica', 10)).grid(row=0, column=3, sticky=tk.W)
+
+        ttk.Label(info_frame, text="Tipo:", font=('Helvetica', 10, 'bold')).grid(row=0, column=4, sticky=tk.W, padx=5)
+        tipo = atendimento.get('tipo', 'Remoto')  # Usa o tipo salvo ou 'Remoto' como padrão
+        ttk.Label(info_frame, text=tipo, font=('Helvetica', 10)).grid(row=0, column=5, sticky=tk.W)
+
+
         ttk.Label(fields_frame, text="Cliente:").grid(row=0, column=0, sticky=tk.W)
         cliente_label = ttk.Label(fields_frame, text=atendimento["cliente"])
         cliente_label.grid(row=0, column=1, sticky=tk.W)
@@ -1926,10 +2248,11 @@ class AtendimentoApp:
         hora_label = ttk.Label(fields_frame, text=hora_inicial)
         hora_label.grid(row=3, column=1, sticky=tk.W)
 
+
         ttk.Label(fields_frame, text="Problema a resolver:").grid(row=4, column=0, sticky=tk.W)
         problema_entry = scrolledtext.ScrolledText(
             fields_frame,
-            width=60,
+            width=80,
             height=4,
             wrap=tk.WORD
         )
@@ -1943,8 +2266,8 @@ class AtendimentoApp:
         ttk.Label(fields_frame, text="Tarefa realizada:").grid(row=5, column=0, sticky=tk.W)
         tarefa_entry = scrolledtext.ScrolledText(
             fields_frame,
-            width=60,
-            height=4,
+            width=80,
+            height=8,
             wrap=tk.WORD
         )
         tarefa_entry.grid(row=5, column=1, sticky=tk.W)
@@ -1955,12 +2278,12 @@ class AtendimentoApp:
         tarefa_entry.bind("<Button-3>", lambda e: self.criar_menu_contexto_generico(e, detalhes_window))
 
         ttk.Label(fields_frame, text="Histórico de Eventos:").grid(row=6, column=0, sticky=tk.W)
-        eventos_text = scrolledtext.ScrolledText(fields_frame, width=60, height=6)
+        eventos_text = scrolledtext.ScrolledText(fields_frame, width=30, height=10)
         eventos_str = "\n".join(
-            [
-                f"{e['tipo'].capitalize()}: {e['data'].strftime('%d/%m/%Y')} {e['hora'].strftime('%H:%M')}"
-                for e in atendimento["eventos"]
-            ]
+        [
+            f"{'Início' if e['tipo'] == 'inicio' else e['tipo'].capitalize()}: {e['data'].strftime('%d/%m/%Y')} {e['hora'].strftime('%H:%M')}"
+            for e in atendimento["eventos"]
+        ]
         )
         eventos_text.insert(tk.END, eventos_str)
         eventos_text.grid(row=6, column=1, sticky=tk.W)
@@ -2002,14 +2325,8 @@ class AtendimentoApp:
 
     def salvar_edicao(self, original_atendimento, window):
         """Salva as alterações feitas no atendimento e atualiza o arquivo todos.txt."""
-        # Armazena o item selecionado antes de salvar
-        selecionado = self.tree.selection()
-        if selecionado:
-            item_selecionado = selecionado[0]
-            valores_originais = self.tree.item(item_selecionado, 'values')
-        else:
-            item_selecionado = None
-            valores_originais = None
+        # Obtém o número do atendimento antes de fazer alterações
+        numero_atendimento = getattr(window, 'numero_atendimento', '')
 
         # Obtém os novos valores dos campos de edição
         new_problema = window.problema_entry.get("1.0", tk.END).strip()
@@ -2078,45 +2395,26 @@ class AtendimentoApp:
         # Recarrega o histórico para refletir as alterações
         self.carregar_historico()
 
-        # Cria uma chave de identificação para o atendimento editado
-        cliente_usuario = f"{new_atendimento['cliente']} – {new_atendimento.get('usuario', '')}"
-        data_str = new_atendimento["eventos"][0]["data"].strftime("%d/%m/%Y") if new_atendimento["eventos"] else "N/A"
+        # Restaura a seleção usando o número do atendimento
+        if numero_atendimento:
+            self.restaurar_selecao_por_numero(numero_atendimento)
 
-        # Procura o item correspondente no histórico recarregado
-        for item in self.tree.get_children():
-            valores = self.tree.item(item, 'values')
-            if valores and len(valores) >= 2:
-                # Compara cliente e data para encontrar o item correspondente
-                if (valores[0] == cliente_usuario and
-                    valores[1] == data_str):
-                    # Seleciona o item encontrado
+    def restaurar_selecao_por_numero(self, numero_atendimento):
+        """Restaura a seleção na treeview com base no número do atendimento"""
+        if not numero_atendimento:
+            return
+
+        # Procura pelo atendimento com o número correspondente
+        for i, atendimento in enumerate(self.current_historico):
+            if atendimento.get("numero_atendimento", "") == numero_atendimento:
+                # Verifica se o índice é válido na treeview
+                children = self.tree.get_children()
+                if i < len(children):
+                    item = children[i]
                     self.tree.selection_set(item)
                     self.tree.focus(item)
                     self.tree.see(item)
-                    break
-
-    def restaurar_selecao_apos_edicao(self, dados_selecao):
-        """Restaura a seleção após edição com base nos dados do atendimento editado"""
-        if not dados_selecao:
-            return
-
-        # Procura pelo atendimento editado na Treeview
-        for item in self.tree.get_children():
-            valores = self.tree.item(item, 'values')
-            if valores and len(valores) >= 2:
-                # Compara cliente e data (os campos mais estáveis)
-                if (valores[0] == dados_selecao['cliente'] and
-                    valores[1] == dados_selecao['data']):
-                    self.tree.selection_set(item)
-                    self.tree.focus(item)
-                    self.tree.see(item)  # Garante que o item está visível
                     return
-
-        # Se não encontrou, tenta selecionar o primeiro item
-        items = self.tree.get_children()
-        if items:
-            self.tree.selection_set(items[0])
-            self.tree.focus(items[0])
 
     def remover_atendimento(self, atendimento, window):
         """
@@ -2207,7 +2505,7 @@ class AtendimentoApp:
             # Normaliza a linha para minúsculas e remove espaços extras
             line = line.strip().lower()
 
-            # Verifica se a linha começa com um tipo de evento válido
+            # Verifica se a linha começa com um tipo de evento válido (incluindo "início" com acento)
             if any(line.startswith(tipo) for tipo in ["início:", "inicio:", "pausa:", "retomada:", "fim:"]):
                 # Divide o tipo do evento e o restante da linha
                 partes = line.split(":", 1)  # Divide apenas no primeiro ":"
@@ -2215,6 +2513,9 @@ class AtendimentoApp:
                     raise ValueError(f"Formato inválido na linha: {line}")
 
                 tipo = partes[0].strip()
+                # Padroniza para "inicio" sem acento internamente
+                if tipo == "início":
+                    tipo = "inicio"
                 data_hora = partes[1].strip()
 
                 try:
@@ -2234,8 +2535,22 @@ class AtendimentoApp:
     def copiar_dados_atendimento(self, atendimento):
         """Copia os dados do atendimento para a área de transferência"""
         try:
+            # Extrai o número do atendimento e o atendente
+            numero_completo = atendimento.get('numero_atendimento', 'N/A')
+            if ' - ' in numero_completo:
+                atendente, numero = numero_completo.split(' - ')
+            else:
+                atendente = 'N/A'
+                numero = numero_completo
+
+            # Obtém o tipo do atendimento
+            tipo = atendimento.get('tipo', 'Remoto')
+
             # Formata os dados do atendimento
             dados_formatados = (
+                f"Nº do atendimento: {numero}\n"
+                f"Atendente: {atendente}\n"
+                f"Tipo: {tipo}\n\n"
                 f"Cliente: {atendimento['cliente']}\n"
                 f"Usuário: {atendimento.get('usuario', 'N/A')}\n\n"
                 f"Data Inicial: {atendimento['eventos'][0]['data'].strftime('%d/%m/%Y') if atendimento['eventos'] else 'N/A'}\n"
@@ -2245,10 +2560,11 @@ class AtendimentoApp:
                 "Eventos:\n"
             )
 
-            # Adiciona os eventos
+            # Adiciona os eventos (mostrando "Início" com acento)
             for evento in atendimento['eventos']:
+                tipo_exibicao = "Início" if evento['tipo'] == "inicio" else evento['tipo'].capitalize()
                 dados_formatados += (
-                    f"- {evento['tipo'].capitalize()}: "
+                    f"- {tipo_exibicao}: "
                     f"{evento['data'].strftime('%d/%m/%Y')} {evento['hora'].strftime('%H:%M')}\n"
                 )
 
@@ -2257,9 +2573,9 @@ class AtendimentoApp:
             if tempo_total:
                 horas = int(tempo_total.total_seconds() // 3600)
                 minutos = int((tempo_total.total_seconds() % 3600) // 60)
-                dados_formatados += f"Tempo Total: {horas:02d}:{minutos:02d}\n"
+                dados_formatados += f"\nTempo Total: {horas:02d}:{minutos:02d}\n"
             else:
-                dados_formatados += "Tempo Total: N/A\n"
+                dados_formatados += "\nTempo Total: N/A\n"
 
             # Copia para a área de transferência
             self.root.clipboard_clear()
@@ -2270,6 +2586,135 @@ class AtendimentoApp:
         except Exception as e:
             print(f"Erro ao copiar dados do atendimento: {e}")
             return False
+
+    def verificar_status_botao(self, atendimento):
+        """Verifica o status do atendimento e configura o botão apropriadamente"""
+        if hasattr(self, 'status_btn'):
+            # Obtém o número do atendimento (apenas a parte numérica)
+            numero_atendimento_completo = atendimento.get('numero_atendimento', '')
+            numero_atendimento = numero_atendimento_completo.split(' - ')[-1]
+
+            if not numero_atendimento:
+                self.status_btn.config(text="Status desconhecido", style="")
+                return
+
+            # Verifica o status no arquivo status.txt
+            data_inicio = atendimento["eventos"][0]["data"]
+            ano_dir = self.base_dir / str(data_inicio.year)
+            mes_dir = ano_dir / data_inicio.strftime("%B").lower()
+            status_path = mes_dir / "status.txt"
+
+            if status_path.exists():
+                with open(status_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+
+                # Divide o conteúdo em blocos de atendimento
+                blocos = content.split("**********************************\n")
+
+                for bloco in blocos:
+                    if f"Número do atendimento: {numero_atendimento}" in bloco:
+                        if "Situação: Processado" in bloco:
+                            self.status_btn.config(text="Processado", style="Green.TButton")
+                            return
+                        elif "Situação: Não Processado" in bloco:
+                            self.status_btn.config(text="Não Processado", style="Red.TButton")
+                            return
+
+            # Se não encontrou o atendimento ou o status, define como não processado
+            self.status_btn.config(text="Não Processado", style="Red.TButton")
+
+    def alternar_status_atendimento(self, window, atendimento):
+        """Alterna o status entre Processado e Não Processado"""
+        # Obtém o número do atendimento (apenas a parte numérica)
+        numero_atendimento_completo = atendimento.get('numero_atendimento', '')
+        numero_atendimento = numero_atendimento_completo.split(' - ')[-1]
+
+        if not numero_atendimento:
+            mostrar_erro(window, "Não foi possível identificar o número do atendimento.")
+            return
+
+        # Obtém o caminho do arquivo status.txt
+        data_inicio = atendimento["eventos"][0]["data"]
+        ano_dir = self.base_dir / str(data_inicio.year)
+        mes_dir = ano_dir / data_inicio.strftime("%B").lower()
+        status_path = mes_dir / "status.txt"
+
+        if not status_path.exists():
+            mostrar_erro(window, "Arquivo de status não encontrado.")
+            return
+
+        # Lê o conteúdo do arquivo
+        with open(status_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Divide o conteúdo em blocos de atendimento
+        blocos = content.split("**********************************\n")
+        novo_conteudo = []
+        status_alterado = False
+
+        for bloco in blocos:
+            if not bloco.strip():
+                continue
+
+            if f"Número do atendimento: {numero_atendimento}" in bloco:
+                # Este é o bloco do atendimento que queremos alterar
+                linhas = bloco.split('\n')
+                novo_bloco = []
+
+                for linha in linhas:
+                    if linha.startswith("Situação: "):
+                        # Altera o status mantendo o mesmo formato
+                        if "Não Processado" in linha:
+                            novo_bloco.append("Situação: Processado")
+                        elif "Processado" in linha:
+                            novo_bloco.append("Situação: Não Processado")
+                        else:
+                            novo_bloco.append("Situação: Não Processado")
+                    else:
+                        novo_bloco.append(linha)
+
+                # Junta as linhas mantendo as quebras de linha originais
+                novo_bloco = '\n'.join(novo_bloco)
+
+                # Atualiza o botão
+                if "Situação: Processado" in novo_bloco:
+                    self.status_btn.config(text="Processado", style="Green.TButton")
+                else:
+                    self.status_btn.config(text="Não Processado", style="Red.TButton")
+
+                novo_conteudo.append(novo_bloco)
+                status_alterado = True
+            else:
+                novo_conteudo.append(bloco)
+
+        if status_alterado:
+            # Reconstrói o conteúdo do arquivo mantendo o formato original
+            novo_conteudo_completo = "**********************************\n".join(novo_conteudo)
+
+            # Garante que termina com a linha de separação, mas sem quebras extras
+            novo_conteudo_completo = novo_conteudo_completo.strip()
+            novo_conteudo_completo += "\n**********************************\n"
+
+            # Salva o arquivo com o novo status
+            with open(status_path, "w", encoding="utf-8") as f:
+                f.write(novo_conteudo_completo)
+
+            # Obtém o novo status do botão para exibir a mensagem correta
+            novo_status = self.status_btn.cget("text")
+            mostrar_sucesso(window, f"Status alterado para {novo_status} com sucesso!")
+        else:
+            mostrar_erro(window, "Atendimento não encontrado no arquivo de status.")
+
+    def abrir_detalhes_selecionado(self):
+        """Abre a janela de detalhes para o item selecionado no histórico"""
+        selecionados = self.tree.selection()
+        if not selecionados:
+            messagebox.showwarning("Aviso", "Selecione um atendimento para visualizar os detalhes.")
+            return
+
+        # Simula um evento de duplo clique para reutilizar a função existente
+        event = type('Evento', (), {'widget': self.tree})()
+        self.visualizar_detalhes(event)
 
     def calcular_tempo_total_eventos(self, eventos):
         """
@@ -3177,6 +3622,9 @@ class AtendimentoApp:
         with open(self.config_dir / "config_janela.json", "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
 
+        # Salva também as configurações das colunas
+        self.salvar_larguras_colunas()
+
     def ajustar_tamanho_posicao_janela(self):
         largura_tela = self.root.winfo_screenwidth()
         altura_tela = self.root.winfo_screenheight()
@@ -3275,6 +3723,14 @@ class AtendimentoApp:
 
         except Exception as e:
             print(f"Erro ao ordenar arquivos: {e}")
+
+    def configurar_estilo_menu_linux(self):
+        """Configurações específicas para estilização no Linux"""
+        style = ttk.Style()
+        style.configure('TMenubutton', background='lightgray')
+        style.map('TMenubutton',
+                background=[('active', 'lightgray')],
+                foreground=[('active', 'green')])
 
 if __name__ == "__main__":
     root = tk.Tk()
