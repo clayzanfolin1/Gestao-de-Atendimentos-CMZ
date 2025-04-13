@@ -114,10 +114,15 @@ class AtendimentoApp:
         # Define a pasta base de acordo com o sistema operacional
         if platform.system() == "Linux":
             # No Linux/macOS, usa a pasta home com um ponto no início
-            self.base_dir = Path.home() / ".cmz-atendimentos"
+            self.base_dir = Path.home() / ".cmz-atendimentos" #CMZ
+
         else:
             # No Windows, usa a pasta AppData\Local
             self.base_dir = Path.home() / "AppData" / "Local" / "cmz-atendimentos"
+
+        # Cria a pasta de atendimentos (que conterá os anos)
+        self.atendimentos_dir = self.base_dir / "atendimentos"
+        self.atendimentos_dir.mkdir(parents=True, exist_ok=True)
 
 
         # Cria a pasta de dados do usuário
@@ -131,6 +136,10 @@ class AtendimentoApp:
         # Cria a pasta de configurações
         self.config_dir = self.base_dir / "configuracoes"
         self.config_dir.mkdir(parents=True, exist_ok=True)
+
+        # Cria a pasta de backups
+        self.backup_dir = self.base_dir / "backups"
+        self.backup_dir.mkdir(parents=True, exist_ok=True)
 
         # Carrega as configurações da janela
         self.carregar_configuracoes_janela()
@@ -338,8 +347,8 @@ class AtendimentoApp:
         ano_atual = str(datetime.now().year)
         mes_atual = datetime.now().strftime("%B").lower()  # Nome do mês em minúsculas
 
-        # Cria o diretório do ano e do mês, se não existirem
-        mes_dir = self.base_dir / ano_atual / mes_atual
+        # Cria o diretório do ano e do mês dentro da pasta atendimentos
+        mes_dir = self.atendimentos_dir / ano_atual / mes_atual
         mes_dir.mkdir(parents=True, exist_ok=True)  # Cria as pastas automaticamente
 
         # Cria o arquivo todos.txt, se não existir
@@ -482,7 +491,7 @@ class AtendimentoApp:
         Exibe uma caixa de mensagem com informações sobre o desenvolvedor, licença e versão do software.
         """
         sobre_texto = (
-            "Desenvolvedor: Clayton Magalhães Zanfolin  \n\n" "Direitos de uso: Licença Pública Geral GNU versão 2.0   \n\n" "Versão: 1.7.1   "
+            "Desenvolvedor: Clayton Magalhães Zanfolin   \n\n" "Direitos de uso: Licença Pública Geral GNU versão 2.0   \n\n" "Versão: 1.8   "
         )
         messagebox.showinfo("Sobre", sobre_texto)
 
@@ -827,7 +836,9 @@ class AtendimentoApp:
             atendimento = self.tmp_atendimentos.pop(chave_composta, None)
             if atendimento:
                 data = datetime.now().date()
-                ano_dir = self.base_dir / str(data.year)
+
+                # Cria o caminho dentro da pasta atendimentos/ano/mês
+                ano_dir = self.atendimentos_dir / str(data.year)
                 mes_dir = ano_dir / data.strftime("%B").lower()
                 mes_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1522,20 +1533,20 @@ class AtendimentoApp:
 
         self.current_atendimento["numero_atendimento"] = numero_atendimento_completo
 
-        ano_dir = self.base_dir / str(data.year)
-        mes_dir = ano_dir / data.strftime("%B").lower()
-        mes_dir.mkdir(parents=True, exist_ok=True)
-
         # Determina o tipo de atendimento
         tipo_atendimento = "Presencial" if hasattr(self, 'atendimento_presencial') and self.atendimento_presencial else "Remoto"
         self.current_atendimento["tipo"] = tipo_atendimento
 
-        # Salva no arquivo todos.txt (mantém o formato original)
+        # Salva no arquivo todos.txt dentro da pasta atendimentos/ano/mes
+        ano_dir = self.atendimentos_dir / str(data.year)
+        mes_dir = ano_dir / data.strftime("%B").lower()
+        mes_dir.mkdir(parents=True, exist_ok=True)
+
         todos_path = mes_dir / "todos.txt"
         with open(todos_path, "a", encoding="utf-8") as f:
             f.write(self.formatar_atendimento(self.current_atendimento))
 
-        # Salva no arquivo do cliente (mantém o formato original)
+        # Salva no arquivo do cliente
         cliente_path = mes_dir / f"{self.current_atendimento['cliente']}.txt"
         with open(cliente_path, "a", encoding="utf-8") as f:
             f.write(self.formatar_atendimento(self.current_atendimento))
@@ -1646,6 +1657,14 @@ class AtendimentoApp:
             side=tk.LEFT
         )
 
+    # Adiciona um separador entre os botões
+        ttk.Separator(nav_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=5, fill=tk.Y)
+
+        # Adiciona o novo botão Buscar
+        ttk.Button(nav_frame, text="Buscar", command=self.criar_janela_busca).pack(
+            side=tk.LEFT, padx=5
+        )
+
         # Frame para conter a Treeview e as barras de rolagem
         tree_frame = ttk.Frame(frame)
         tree_frame.pack(fill=tk.BOTH, expand=True)
@@ -1744,7 +1763,7 @@ class AtendimentoApp:
 
         # Obtém os anos disponíveis
         anos = set()
-        for entry in self.base_dir.iterdir():
+        for entry in self.atendimentos_dir.iterdir():
             if entry.is_dir() and entry.name.isdigit():
                 anos.add(int(entry.name))
         self.ano_combobox["values"] = sorted(anos, reverse=True)
@@ -1809,17 +1828,16 @@ class AtendimentoApp:
             print(f"Erro ao carregar seleção: {e}")
 
     def verificar_status_atendimento(self, atendimento):
-        """Verifica o status de um atendimento no arquivo status.txt"""
-        # Obtém apenas o número do atendimento (remove o operador)
+        """Verifica o status de um atendimento no arquivo status.txt na NOVA estrutura"""
         numero_atendimento_completo = atendimento.get('numero_atendimento', '')
         if not numero_atendimento_completo:
             return "Não Processado"  # Padrão para atendimentos antigos
 
         numero_atendimento = numero_atendimento_completo.split(' - ')[-1]
-
-        # Obtém o caminho do arquivo status.txt
         data_inicio = atendimento["eventos"][0]["data"]
-        ano_dir = self.base_dir / str(data_inicio.year)
+
+        # Caminho na NOVA estrutura
+        ano_dir = self.atendimentos_dir / str(data_inicio.year)
         mes_dir = ano_dir / data_inicio.strftime("%B").lower()
         status_path = mes_dir / "status.txt"
 
@@ -1829,15 +1847,15 @@ class AtendimentoApp:
         with open(status_path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        # Divide o conteúdo em blocos de atendimento
         blocos = content.split("**********************************\n")
-
         for bloco in blocos:
             if f"Número do atendimento: {numero_atendimento}" in bloco:
                 if "Situação: Processado" in bloco:
                     return "Processado"
                 elif "Situação: Não Processado" in bloco:
                     return "Não Processado"
+                elif "Situação: Cancelado" in bloco:
+                    return "Cancelado"
 
         return "Não Processado"
 
@@ -1855,24 +1873,13 @@ class AtendimentoApp:
             self.tree.delete(item)
         self.current_historico = []
 
-        # Verifica se o diretório do mês existe
-        mes_dir = self.base_dir / ano / mes
-        if not mes_dir.exists():
-            if not self.carregamento_inicial:
-                messagebox.showinfo(
-                    "Sem dados",
-                    f"Não há dados disponíveis para {mes.capitalize()} de {ano}.",
-                )
-            return
-
-        # Verifica se o arquivo todos.txt existe e está vazio
+        # Verifica se o diretório do mês existe dentro da pasta atendimentos
+        mes_dir = self.atendimentos_dir / ano / mes
         todos_path = mes_dir / "todos.txt"
-        if not todos_path.exists() or todos_path.stat().st_size == 0:
+
+        if not todos_path.exists():
             if not self.carregamento_inicial:
-                messagebox.showinfo(
-                    "Sem dados",
-                    f"Não há dados disponíveis para {mes.capitalize()} de {ano}.",
-                )
+                messagebox.showinfo("Sem dados", f"Não há dados para {mes.capitalize()} de {ano}")
             return
 
         # Configura a tag para atendimentos processados
@@ -2317,11 +2324,20 @@ class AtendimentoApp:
 
     def toggle_edit(self, window, enable):
         state = tk.NORMAL if enable else tk.DISABLED
-        window.problema_entry.config(state=state)
-        window.tarefa_entry.config(state=state)
-        window.eventos_text.config(state=state)
-        window.edit_button.config(state=tk.DISABLED if enable else tk.NORMAL)
-        window.save_button.config(state=tk.NORMAL if enable else tk.DISABLED)
+
+        # Verifica e configura cada widget apenas se existir
+        if hasattr(window, 'problema_entry'):
+            window.problema_entry.config(state=state)
+        if hasattr(window, 'tarefa_entry'):
+            window.tarefa_entry.config(state=state)
+        if hasattr(window, 'eventos_text'):
+            window.eventos_text.config(state=state)
+
+        # Configura os botões apenas se existirem
+        if hasattr(window, 'edit_button'):
+            window.edit_button.config(state=tk.DISABLED if enable else tk.NORMAL)
+        if hasattr(window, 'save_button'):
+            window.save_button.config(state=tk.NORMAL if enable else tk.DISABLED)
 
     def salvar_edicao(self, original_atendimento, window):
         """Salva as alterações feitas no atendimento e atualiza o arquivo todos.txt."""
@@ -2355,21 +2371,21 @@ class AtendimentoApp:
         new_block = self.formatar_atendimento(new_atendimento)
 
         # Obtém o caminho do arquivo todos.txt
+        # Obtém o caminho na NOVA estrutura (atendimentos/ano/mês/)
         data_inicio = original_atendimento["eventos"][0]["data"]
-        ano = data_inicio.year
-        mes = data_inicio.strftime("%B").lower()
-        mes_dir = self.base_dir / str(ano) / mes
-        todos_path = mes_dir / "todos.txt"
+        ano_dir = self.atendimentos_dir / str(data_inicio.year)
+        mes_dir = ano_dir / data_inicio.strftime("%B").lower()
 
-        # Atualiza o arquivo todos.txt
+        # Atualiza todos.txt
+        todos_path = mes_dir / "todos.txt"
         if todos_path.exists():
             with open(todos_path, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            # Substitui o bloco original pelo novo bloco
+            original_block = self.formatar_atendimento(original_atendimento)
+            new_block = self.formatar_atendimento(new_atendimento)
             new_content = content.replace(original_block, new_block)
 
-            # Salva o conteúdo atualizado no arquivo
             with open(todos_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
 
@@ -2440,38 +2456,32 @@ class AtendimentoApp:
 
         # Obtém o caminho do arquivo todos.txt
         data_inicio = atendimento["eventos"][0]["data"]
-        ano = data_inicio.year
-        mes = data_inicio.strftime("%B").lower()
-        mes_dir = self.base_dir / str(ano) / mes
-        todos_path = mes_dir / "todos.txt"
+        ano_dir = self.atendimentos_dir / str(data_inicio.year)
+        mes_dir = ano_dir / data_inicio.strftime("%B").lower()
 
-        # Remove o atendimento do arquivo todos.txt
+        # Remove de todos.txt
+        todos_path = mes_dir / "todos.txt"
         if todos_path.exists():
             with open(todos_path, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            # Remove o bloco do atendimento
             original_block = self.formatar_atendimento(atendimento)
             new_content = content.replace(original_block, "")
 
-            # Salva o conteúdo atualizado no arquivo
             with open(todos_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
 
-        # Remove o atendimento do arquivo do cliente, se existir
+        # Remove do arquivo do cliente
         cliente_path = mes_dir / f"{atendimento['cliente']}.txt"
         if cliente_path.exists():
             with open(cliente_path, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            # Remove o bloco do atendimento
             new_content = content.replace(original_block, "")
-
-            # Salva o conteúdo atualizado no arquivo
             with open(cliente_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
 
-        # Adiciona o atendimento removido ao arquivo desistente.txt
+        # Adiciona ao desistente.txt
         desistente_path = mes_dir / "desistente.txt"
         with open(desistente_path, "a", encoding="utf-8") as f:
             f.write(
@@ -2480,7 +2490,7 @@ class AtendimentoApp:
                 f"Problema: {atendimento['problema']}\n"
                 f"Tarefa: {atendimento['tarefa']}\n"
                 f"Data: {data_inicio.strftime('%d/%m/%Y')}\n"
-                f"Tempo: 00:00\n"  # Tempo total pode ser ajustado se necessário
+                f"Tempo: 00:00\n"
                 "----------------------------------\n"
             )
 
@@ -2600,7 +2610,7 @@ class AtendimentoApp:
 
             # Verifica o status no arquivo status.txt
             data_inicio = atendimento["eventos"][0]["data"]
-            ano_dir = self.base_dir / str(data_inicio.year)
+            ano_dir = self.atendimentos_dir / str(data_inicio.year)
             mes_dir = ano_dir / data_inicio.strftime("%B").lower()
             status_path = mes_dir / "status.txt"
 
@@ -2635,7 +2645,7 @@ class AtendimentoApp:
 
         # Obtém o caminho do arquivo status.txt
         data_inicio = atendimento["eventos"][0]["data"]
-        ano_dir = self.base_dir / str(data_inicio.year)
+        ano_dir = self.atendimentos_dir / str(data_inicio.year)
         mes_dir = ano_dir / data_inicio.strftime("%B").lower()
         status_path = mes_dir / "status.txt"
 
@@ -3549,14 +3559,12 @@ class AtendimentoApp:
             mostrar_sucesso(self.root, "Conteúdo copiado para a área de transferência!")
 
     def criar_backup(self):
-        backup_dir = self.base_dir / "backups"
-        backup_dir.mkdir(exist_ok=True)
-
+        """Cria um backup dos arquivos do aplicativo"""
         # Obtém a data atual no formato "ddmmyyyy"
         data_atual = datetime.now().strftime("%d%m%Y")
 
         # Verifica se já existe um backup com a data atual
-        backup_existente = list(backup_dir.glob(f"backup_{data_atual}_*.zip"))
+        backup_existente = list(self.backup_dir.glob(f"backup_{data_atual}_*.zip"))
 
         # Se já existir um backup com a data atual, não cria um novo
         if backup_existente:
@@ -3565,20 +3573,22 @@ class AtendimentoApp:
 
         # Se não existir, cria um novo backup com a data e hora atual
         timestamp = datetime.now().strftime("%d%m%Y_%H%M%S")
-        backup_file = backup_dir / f"backup_{timestamp}.zip"
+        backup_file = self.backup_dir / f"backup_{timestamp}.zip"
 
         with zipfile.ZipFile(backup_file, "w") as zipf:
-            for root, dirs, files in os.walk(self.base_dir):
-                if "backups" in root:
+            for root_dir, dirs, files in os.walk(self.base_dir):
+                # Ignora a pasta de backups durante o backup
+                if "backups" in root_dir:
                     continue
                 for file in files:
+                    file_path = os.path.join(root_dir, file)
                     zipf.write(
-                        os.path.join(root, file),
-                        os.path.relpath(os.path.join(root, file), self.base_dir),
+                        file_path,
+                        os.path.relpath(file_path, self.base_dir),
                     )
 
-        # Limita o número de backups mantidos (opcional)
-        backups = sorted(backup_dir.glob("backup_*.zip"), key=os.path.getmtime)
+        # Limita o número de backups
+        backups = sorted(self.backup_dir.glob("backup_*.zip"), key=os.path.getmtime)
         while len(backups) > 15:
             backups[0].unlink()
             backups.pop(0)
@@ -3731,6 +3741,850 @@ class AtendimentoApp:
         style.map('TMenubutton',
                 background=[('active', 'lightgray')],
                 foreground=[('active', 'green')])
+
+        #Criar janela e o sistema de busca
+
+    def criar_janela_busca(self):
+        """Cria uma janela de busca avançada para clientes e usuários"""
+        if hasattr(self, 'janela_busca') and self.janela_busca.winfo_exists():
+            self.janela_busca.lift()
+            return
+
+        self.janela_busca = tk.Toplevel(self.root)
+        self.janela_busca.title("Busca Avançada")
+        self.janela_busca.geometry("970x680")
+
+        # Frame principal
+        main_frame = ttk.Frame(self.janela_busca)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Frame de critérios de busca
+        criteria_frame = ttk.LabelFrame(main_frame, text="Critérios de Busca")
+        criteria_frame.pack(fill=tk.X, pady=5)
+
+        # Cliente (agora com Combobox)
+        ttk.Label(criteria_frame, text="Cliente:").grid(row=0, column=0, sticky=tk.W, padx=5)
+        self.busca_cliente_combobox = ttk.Combobox(criteria_frame, width=30)
+        self.busca_cliente_combobox.grid(row=0, column=1, sticky=tk.W, padx=5)
+        self.busca_cliente_combobox['values'] = self.clientes
+        self.busca_cliente_combobox.bind('<<ComboboxSelected>>', self.atualizar_usuarios_busca)
+
+        # Usuário (agora com Combobox)
+        ttk.Label(criteria_frame, text="Usuário:").grid(row=0, column=2, sticky=tk.W, padx=5)
+        self.busca_usuario_combobox = ttk.Combobox(criteria_frame, width=30)
+        self.busca_usuario_combobox.grid(row=0, column=3, sticky=tk.W, padx=5)
+
+        # Ano
+        ttk.Label(criteria_frame, text="Ano:").grid(row=1, column=0, sticky=tk.W, padx=5)
+        self.busca_ano_combobox = ttk.Combobox(criteria_frame, width=8)
+        self.busca_ano_combobox.grid(row=1, column=1, sticky=tk.W, padx=5)
+
+        # Mês
+        ttk.Label(criteria_frame, text="Mês:").grid(row=1, column=2, sticky=tk.W, padx=5)
+        meses = ["", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+        self.busca_mes_combobox = ttk.Combobox(criteria_frame, values=meses, width=10)
+        self.busca_mes_combobox.grid(row=1, column=3, sticky=tk.W, padx=5)
+
+        # Dia (novo campo)
+        ttk.Label(criteria_frame, text="Dia:").grid(row=1, column=4, sticky=tk.W, padx=5)
+        dias = [""] + [str(i) for i in range(1, 32)]
+        self.busca_dia_combobox = ttk.Combobox(criteria_frame, values=dias, width=5)
+        self.busca_dia_combobox.grid(row=1, column=5, sticky=tk.W, padx=5)
+
+        # Tipo
+        ttk.Label(criteria_frame, text="Tipo:").grid(row=2, column=0, sticky=tk.W, padx=5)
+        self.busca_tipo_combobox = ttk.Combobox(criteria_frame,
+                                            values=["Todos", "Presencial", "Remoto"],
+                                            width=10)
+        self.busca_tipo_combobox.grid(row=2, column=1, sticky=tk.W, padx=5)
+        self.busca_tipo_combobox.set("Todos")
+
+        # Situação
+        ttk.Label(criteria_frame, text="Situação:").grid(row=2, column=2, sticky=tk.W, padx=5)
+        self.busca_situacao_combobox = ttk.Combobox(criteria_frame,
+                                                values=["Todos", "Processado", "Não Processado", "Cancelado"],
+                                                width=15)
+        self.busca_situacao_combobox.grid(row=2, column=3, sticky=tk.W, padx=5)
+        self.busca_situacao_combobox.set("Todos")
+
+        # Adicionar novo campo de busca por palavras-chave
+        ttk.Label(criteria_frame, text="Palavras-chave:").grid(row=3, column=0, sticky=tk.W, padx=5)
+        self.busca_palavras_entry = ttk.Entry(criteria_frame, width=40)
+        self.busca_palavras_entry.grid(row=3, column=1, columnspan=3, sticky=tk.W, padx=5)
+        ttk.Label(criteria_frame, text="(busca em Problema/Tarefa)").grid(row=3, column=3, sticky=tk.W, padx=5)
+
+        # Botões de ação
+        btn_frame = ttk.Frame(criteria_frame)
+        btn_frame.grid(row=4, column=0, columnspan=6, pady=10)
+
+        ttk.Button(btn_frame, text="Buscar", command=self.executar_busca).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Limpar", command=self.limpar_busca).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Abrir Espelhamentos",
+                command=self.abrir_espelhamentos_busca).pack(side=tk.LEFT, padx=5)
+
+        # Frame de resultados
+        results_frame = ttk.LabelFrame(main_frame, text="Resultados")
+        results_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # Treeview para resultados
+        self.busca_tree = ttk.Treeview(results_frame,
+                                        columns=("Cliente", "Usuário", "Problema", "Data", "Tipo", "Situação", "Tempo"),
+                                    show="headings")
+        self.busca_tree.pack(fill=tk.BOTH, expand=True)
+
+        # Configurar colunas
+        colunas = [("Cliente", 180), ("Usuário", 120), ("Problema", 250), ("Data", 80),
+                ("Tipo", 80), ("Situação", 100), ("Tempo", 60)]
+        for col, width in colunas:
+            self.busca_tree.heading(col, text=col)
+            self.busca_tree.column(col, width=width, anchor=tk.W)
+
+        # Barra de rolagem
+        scrollbar = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=self.busca_tree.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.busca_tree.configure(yscrollcommand=scrollbar.set)
+
+        # Configurar tags para cores
+
+        style = ttk.Style()
+        style.configure("Red.Treeview", foreground="red")
+        style.configure("Green.Treeview", foreground="green")
+        style.configure("Orange.Treeview", foreground="orange")
+
+        self.busca_tree.tag_configure('aberto', foreground='red')
+        self.busca_tree.tag_configure('processado', foreground='green')
+        self.busca_tree.tag_configure('nao_processado', foreground='black')
+        self.busca_tree.tag_configure('cancelado', foreground='orange')
+        self.busca_tree.tag_configure('presencial', font=('Helvetica', 10, 'bold'))
+        self.busca_tree.tag_configure('presencial_processado', foreground='green', font=('Helvetica', 10, 'bold'))
+
+        # Evento de duplo clique - agora chama a janela de detalhes existente
+        self.busca_tree.bind("<Double-1>", self.abrir_detalhes_selecionado_busca)
+
+        # Carregar anos disponíveis
+        self.carregar_anos_disponiveis()
+
+    def carregar_anos_disponiveis(self):
+        """Carrega anos disponíveis na NOVA estrutura atendimentos/"""
+        anos = sorted([int(d.name) for d in self.atendimentos_dir.iterdir()
+                    if d.is_dir() and d.name.isdigit()], reverse=True)
+        self.busca_ano_combobox["values"] = anos
+        if anos:
+            self.busca_ano_combobox.set(anos[0])
+
+    def atualizar_usuarios_busca(self, event=None):
+        """Atualiza a lista de usuários quando um cliente é selecionado"""
+        cliente = self.busca_cliente_combobox.get()
+        usuarios = self.carregar_usuarios_para_cliente(cliente)
+        self.busca_usuario_combobox['values'] = usuarios
+
+    def abrir_detalhes_selecionado_busca(self, event):
+        """Abre a janela de detalhes para o item selecionado na busca"""
+        selecionado = self.busca_tree.selection()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione um atendimento para visualizar os detalhes.")
+            return
+
+        item = selecionado[0]
+
+        # Obtém o índice do item selecionado na treeview
+        indice = self.busca_tree.index(item)
+
+        # Verifica se o índice está dentro dos resultados armazenados
+        if hasattr(self, 'resultados_busca_completos') and 0 <= indice < len(self.resultados_busca_completos):
+            atendimento = self.resultados_busca_completos[indice]
+            self.visualizar_detalhes_busca(atendimento)
+        else:
+            messagebox.showwarning("Aviso", "Não foi possível encontrar os detalhes deste atendimento.")
+
+    def limpar_busca(self):
+        """Limpa todos os critérios de busca e os resultados"""
+        # Limpa os campos de entrada
+        self.busca_cliente_combobox.set('')
+        self.busca_usuario_combobox.set('')
+        self.busca_usuario_combobox['values'] = []
+        self.busca_ano_combobox.set('Todos')
+        self.busca_mes_combobox.set('')
+        self.busca_dia_combobox.set('')
+        self.busca_tipo_combobox.set('Todos')
+        self.busca_situacao_combobox.set('Todos')
+        self.busca_palavras_entry.delete(0, tk.END)
+
+        # Limpa a treeview de resultados
+        for item in self.busca_tree.get_children():
+            self.busca_tree.delete(item)
+
+        # Limpa os resultados armazenados
+        if hasattr(self, 'resultados_busca_completos'):
+            del self.resultados_busca_completos
+
+    def executar_busca(self):
+        # Limpa resultados anteriores
+        for item in self.busca_tree.get_children():
+            self.busca_tree.delete(item)
+
+        # Obtém critérios
+        cliente = self.busca_cliente_combobox.get().strip()
+        usuario = self.busca_usuario_combobox.get().strip()
+        ano = self.busca_ano_combobox.get()
+        mes = self.busca_mes_combobox.get().lower() if self.busca_mes_combobox.get() else ""
+        dia = self.busca_dia_combobox.get()
+        tipo = self.busca_tipo_combobox.get()
+        situacao = self.busca_situacao_combobox.get()
+        palavras = [p.lower() for p in self.busca_palavras_entry.get().strip().split() if p]
+
+        # Executa buscas
+        resultados = []
+        resultados.extend(self.buscar_atendimentos_concluidos(cliente, usuario, ano, mes, dia, tipo, situacao, palavras))
+
+        if situacao in ["Todos", "Cancelado"]:
+            resultados.extend(self.buscar_atendimentos_cancelados(cliente, usuario, ano, mes, dia, palavras))
+
+        if situacao in ["Todos", "Não Processado"]:
+            resultados.extend(self.buscar_atendimentos_abertos(cliente, usuario, palavras))
+
+        # Armazena resultados completos mantendo a ordem da treeview
+        self.resultados_busca_completos = []
+
+        # Função auxiliar para obter data ou datetime.min se None
+        def get_data_safe(atend):
+            data = atend.get("data_inicio")
+            return data if data is not None else datetime.min.date()
+
+        # Configura tags para cores - ADICIONE ESTAS LINHAS
+        self.busca_tree.tag_configure('aberto', foreground='red')
+        self.busca_tree.tag_configure('processado', foreground='green')
+        self.busca_tree.tag_configure('nao_processado', foreground='black')
+        self.busca_tree.tag_configure('cancelado', foreground='orange')
+
+        # Preenche a treeview e armazena os resultados na mesma ordem
+        for atend in sorted(resultados, key=lambda x: get_data_safe(x), reverse=True):
+
+            # Prepara o texto do problema resumido
+            problema = atend.get("problema", "")
+            problema_resumido = (problema[:50] + "...") if len(problema) > 50 else problema
+
+            tags = []
+            if atend["situacao"] == "Processado":
+                if atend.get("tipo") == "Presencial":
+                    tags.append('presencial_processado')
+                else:
+                    tags.append('processado')
+            elif atend["situacao"] == "Cancelado":
+                tags.append('cancelado')
+                tags.append('bold') # Negrito
+            elif atend.get("tipo") == "Em aberto":
+                tags.append('aberto')
+                tags.append('bold') # Negrito
+            elif atend.get("tipo") == "Presencial":
+                tags.append('presencial')
+            else:
+                tags.append('nao_processado')
+
+            tempo = atend.get("tempo_total", "N/A")
+            if isinstance(tempo, timedelta):
+                horas = int(tempo.total_seconds() // 3600)
+                minutos = int((tempo.total_seconds() % 3600) // 60)
+                tempo = f"{horas:02d}:{minutos:02d}"
+
+            self.busca_tree.tag_configure('bold', font=('Helvetica', 10, 'bold'))
+
+            # Insere na treeview
+            self.busca_tree.insert("", tk.END,
+                                values=(
+                                    atend["cliente"],
+                                    atend.get("usuario", ""),
+                                    problema_resumido,
+                                    atend["data_inicio"].strftime("%d/%m/%Y") if atend.get("data_inicio") else "N/A",
+                                    atend.get("tipo", "Remoto"),
+                                    atend["situacao"],
+                                    tempo
+                                ),
+                                tags=tuple(tags))
+
+            # Armazena o atendimento na mesma ordem
+            self.resultados_busca_completos.append(atend)
+
+    def buscar_atendimentos_concluidos(self, cliente, usuario, ano, mes, dia, tipo, situacao, palavras):
+        """Busca atendimentos concluídos na NOVA estrutura atendimentos/ano/mês/"""
+        resultados = []
+
+        # Determina anos para buscar
+        anos = []
+        if ano and ano != "Todos":
+            anos = [ano]
+        else:
+            anos = [d.name for d in self.atendimentos_dir.iterdir() if d.is_dir() and d.name.isdigit()]
+
+        for ano_dir in anos:
+            ano_path = self.atendimentos_dir / ano_dir
+
+            # Determina meses para buscar
+            meses = []
+            if mes:
+                meses = [mes]
+            else:
+                meses = [d.name for d in ano_path.iterdir() if d.is_dir()]
+
+            for mes_dir in meses:
+                mes_path = ano_path / mes_dir
+                todos_path = mes_path / "todos.txt"
+
+                if not todos_path.exists():
+                    continue
+
+                with open(todos_path, "r", encoding="utf-8") as f:
+                    atendimentos = self.parse_arquivo_historico(f.read())
+
+                for atend in atendimentos:
+                    # Aplica filtros
+                    if cliente and cliente.lower() not in atend["cliente"].lower():
+                        continue
+                    if usuario and usuario.lower() not in atend.get("usuario", "").lower():
+                        continue
+                    if tipo != "Todos" and tipo != atend.get("tipo", "Remoto"):
+                        continue
+
+                    # Filtro por dia
+                    if dia and atend.get("eventos"):
+                        data_inicio = atend["eventos"][0]["data"]
+                        if str(data_inicio.day) != dia:
+                            continue
+
+                    # Verifica situação na NOVA estrutura
+                    situacao_atend = self.verificar_status_atendimento(atend)
+                    if situacao != "Todos" and situacao != situacao_atend:
+                        continue
+
+                    # Filtro por palavras-chave
+                    if palavras:
+                        problema = atend.get("problema", "").lower()
+                        tarefa = atend.get("tarefa", "").lower()
+                        if not any(palavra in problema or palavra in tarefa for palavra in palavras):
+                            continue
+
+                    # Adiciona informações adicionais
+                    atend["situacao"] = situacao_atend
+                    atend["data_inicio"] = atend["eventos"][0]["data"] if atend["eventos"] else None
+                    resultados.append(atend)
+
+        return resultados
+
+    def buscar_atendimentos_cancelados(self, cliente, usuario, ano, mes, dia, palavras):
+        """Busca atendimentos cancelados na NOVA estrutura atendimentos/ano/mês/desistente.txt"""
+        resultados = []
+
+        anos = []
+        if ano == "Todos":
+            anos = [d.name for d in self.atendimentos_dir.iterdir() if d.is_dir() and d.name.isdigit()]
+        else:
+            anos = [ano]
+
+        for ano_dir in anos:
+            ano_path = self.atendimentos_dir / ano_dir
+
+            meses = []
+            if mes:
+                meses = [mes]
+            else:
+                meses = [d.name for d in ano_path.iterdir() if d.is_dir()]
+
+            for mes_dir in meses:
+                mes_path = ano_path / mes_dir
+                desistente_path = mes_path / "desistente.txt"
+
+                if not desistente_path.exists():
+                    continue
+
+                with open(desistente_path, "r", encoding="utf-8") as f:
+                    blocos = f.read().split("----------------------------------\n")
+
+                for bloco in blocos:
+                    if not bloco.strip():
+                        continue
+
+                    dados = {}
+                    for linha in bloco.split("\n"):
+                        if ":" in linha:
+                            chave, valor = linha.split(":", 1)
+                            dados[chave.strip()] = valor.strip()
+
+                    # Aplica filtros
+                    if cliente and cliente.lower() not in dados.get("Cliente", "").lower():
+                        continue
+                    if usuario and usuario.lower() not in dados.get("Usuário", "").lower():
+                        continue
+
+                    try:
+                        data = datetime.strptime(dados.get("Data", ""), "%d/%m/%Y").date()
+                    except:
+                        data = None
+
+                    if dia and data and str(data.day) != dia:
+                        continue
+                    if ano != "Todos" and data and str(data.year) != ano:
+                        continue
+                    if mes and data and data.strftime("%B").lower() != mes:
+                        continue
+
+                    if palavras:
+                        problema = dados.get("Problema", "").lower()
+                        tarefa = dados.get("Tarefa", "").lower()
+                        if not any(p in problema or p in tarefa for p in palavras):
+                            continue
+
+                    atendimento = {
+                        "cliente": dados.get("Cliente", ""),
+                        "usuario": dados.get("Usuário", ""),
+                        "problema": dados.get("Problema", ""),
+                        "tarefa": dados.get("Tarefa", ""),
+                        "data_inicio": data,
+                        "tempo_total": "00:00",
+                        "situacao": "Cancelado",
+                        "tipo": "Cancelado",
+                        "eventos": [{"tipo": "inicio", "data": data, "hora": time(0, 0)}] if data else []
+                    }
+                    resultados.append(atendimento)
+
+        return resultados
+
+    def buscar_atendimentos_abertos(self, cliente, usuario, palavras):
+        """Busca atendimentos em aberto (tmp_atendimentos)"""
+        resultados = []
+
+        for chave, atendimento in self.tmp_atendimentos.items():
+            # Aplica filtros
+            if cliente and cliente.lower() not in atendimento["cliente"].lower():
+                continue
+            if usuario and usuario.lower() not in atendimento.get("usuario", "").lower():
+                continue
+
+            # Aplica filtro de palavras-chave
+            if palavras:
+                problema = atendimento.get("problema", "").lower()
+                tarefa = atendimento.get("tarefa", "").lower()
+                encontrou = False
+
+                for palavra in palavras:
+                    if palavra in problema or palavra in tarefa:
+                        encontrou = True
+                        break
+
+                if not encontrou:
+                    continue
+
+            # Adiciona informações adicionais
+            atendimento["situacao"] = "Não Processado"
+            atendimento["data_inicio"] = atendimento["eventos"][0]["data"] if atendimento["eventos"] else None
+            atendimento["tempo_total"] = "Em aberto"
+            atendimento["tipo"] = "Em aberto"
+
+            resultados.append(atendimento)
+
+        return resultados
+
+    def visualizar_detalhes_busca(self, atendimento):
+        """Adaptação da função visualizar_detalhes para funcionar com a busca"""
+        # Cria uma cópia do atendimento para não modificar o original
+        original_atendimento = copy.deepcopy(atendimento)
+
+        # Verifica se é um atendimento da busca ou um tmp_atendimento
+        is_tmp_atendimento = not original_atendimento.get("finalizado", True)
+
+        # Armazena o número do atendimento
+        numero_atendimento = original_atendimento.get("numero_atendimento", "")
+
+        # Cria a janela de detalhes como filha da janela de busca
+        detalhes_window = tk.Toplevel(self.janela_busca)
+        detalhes_window.title("Detalhes do Atendimento")
+        detalhes_window.geometry("720x580")
+
+        # Armazena informações importantes na janela
+        detalhes_window.numero_atendimento = numero_atendimento
+        detalhes_window.original_atendimento = original_atendimento
+        detalhes_window.is_tmp_atendimento = is_tmp_atendimento
+
+        # Frame principal
+        main_frame = ttk.Frame(detalhes_window)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=5)
+
+        # Adiciona uma linha separadora
+        ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
+
+        # Botão Editar
+        edit_button = ttk.Button(
+            btn_frame,
+            text="Editar",
+            command=lambda: self.toggle_edit(detalhes_window, True),
+        )
+        edit_button.pack(side=tk.LEFT, padx=5)
+
+        # Botão Salvar - modificado para usar a função correta
+        save_button = ttk.Button(
+            btn_frame,
+            text="Salvar",
+            command=lambda: self.salvar_edicao_busca(detalhes_window),
+        )
+        save_button.pack(side=tk.LEFT, padx=5)
+        save_button.config(state=tk.DISABLED)
+
+        # Botão Remover - modificado para funcionar com busca
+        remove_button = ttk.Button(
+            btn_frame,
+            text="Remover este Atendimento",
+            command=lambda: self.remover_atendimento_busca(detalhes_window),
+        )
+        remove_button.pack(side=tk.LEFT, padx=5)
+
+        # Botão Copiar
+        ttk.Button(
+            btn_frame,
+            text="Copiar dados do atendimento",
+            command=lambda: self.copiar_dados_do_atendimento(detalhes_window, original_atendimento)
+        ).pack(side=tk.LEFT, padx=5)
+
+        fields_frame = ttk.Frame(main_frame)
+        fields_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Botão de status (só para atendimentos finalizados)
+        if not is_tmp_atendimento and original_atendimento.get("situacao") != "Cancelado":
+            self.status_btn = ttk.Button(
+                btn_frame,
+                text="Não Processado",
+                style="Red.TButton",
+                command=lambda: self.alternar_status_atendimento(detalhes_window, original_atendimento)
+            )
+            self.status_btn.pack(side=tk.LEFT, padx=5)
+
+            # Configura o estilo dos botões de status
+            style = ttk.Style()
+            style.configure("Red.TButton", foreground="white", background="red", font=('Helvetica', 10, 'bold'))
+            style.configure("Green.TButton", foreground="white", background="green", font=('Helvetica', 10, 'bold'))
+
+            # Verifica o status atual e configura o botão
+            self.verificar_status_botao(original_atendimento)
+
+        # Adiciona uma linha separadora
+        ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
+
+        # Frame para informações do atendimento
+        info_frame = ttk.Frame(main_frame)
+        info_frame.pack(fill=tk.X, pady=5)
+
+        # Campos de informações do atendimento
+        ttk.Label(info_frame, text="Atendente:", font=('Helvetica', 10, 'bold')).grid(row=0, column=0, sticky=tk.W, padx=5)
+        ttk.Label(info_frame, text=original_atendimento.get('numero_atendimento', 'N/A').split(' - ')[0],
+                font=('Helvetica', 10)).grid(row=0, column=1, sticky=tk.W)
+
+        ttk.Label(info_frame, text="Nº do atendimento:", font=('Helvetica', 10, 'bold')).grid(row=0, column=2, sticky=tk.W, padx=5)
+        ttk.Label(info_frame, text=original_atendimento.get('numero_atendimento', 'N/A').split(' - ')[-1],
+                font=('Helvetica', 10)).grid(row=0, column=3, sticky=tk.W)
+
+        ttk.Label(info_frame, text="Tipo:", font=('Helvetica', 10, 'bold')).grid(row=0, column=4, sticky=tk.W, padx=5)
+        tipo = original_atendimento.get('tipo', 'Remoto')
+        ttk.Label(info_frame, text=tipo, font=('Helvetica', 10)).grid(row=0, column=5, sticky=tk.W)
+
+        # Campos de detalhes
+        ttk.Label(fields_frame, text="Cliente:").grid(row=0, column=0, sticky=tk.W)
+        cliente_label = ttk.Label(fields_frame, text=original_atendimento["cliente"])
+        cliente_label.grid(row=0, column=1, sticky=tk.W)
+
+        ttk.Label(fields_frame, text="Usuário:").grid(row=1, column=0, sticky=tk.W)
+        usuario_label = ttk.Label(fields_frame, text=original_atendimento.get("usuario", "N/A"))
+        usuario_label.grid(row=1, column=1, sticky=tk.W)
+
+        ttk.Label(fields_frame, text="Data Inicial:").grid(row=2, column=0, sticky=tk.W)
+        data_inicial = (
+            original_atendimento["eventos"][0]["data"].strftime("%d/%m/%Y")
+            if original_atendimento["eventos"]
+            else "N/A"
+        )
+        data_label = ttk.Label(fields_frame, text=data_inicial)
+        data_label.grid(row=2, column=1, sticky=tk.W)
+
+        ttk.Label(fields_frame, text="Hora Inicial:").grid(row=3, column=0, sticky=tk.W)
+        hora_inicial = (
+            original_atendimento["eventos"][0]["hora"].strftime("%H:%M")
+            if original_atendimento["eventos"]
+            else "N/A"
+        )
+        hora_label = ttk.Label(fields_frame, text=hora_inicial)
+        hora_label.grid(row=3, column=1, sticky=tk.W)
+
+        # Campos editáveis
+        ttk.Label(fields_frame, text="Problema a resolver:").grid(row=4, column=0, sticky=tk.W)
+        problema_entry = scrolledtext.ScrolledText(
+            fields_frame,
+            width=80,
+            height=4,
+            wrap=tk.WORD
+        )
+        problema_entry.grid(row=4, column=1, sticky=tk.W)
+        problema_entry.insert(1.0, original_atendimento.get("problema", ""))
+        problema_entry.bind("<<Paste>>", self.colar_texto_com_substituicao)
+        problema_entry.config(state=tk.DISABLED)
+        # Adiciona menu de contexto
+        problema_entry.bind("<Button-3>", lambda e: self.criar_menu_contexto_generico(e, detalhes_window))
+
+        ttk.Label(fields_frame, text="Tarefa realizada:").grid(row=5, column=0, sticky=tk.W)
+        tarefa_entry = scrolledtext.ScrolledText(
+            fields_frame,
+            width=80,
+            height=8,
+            wrap=tk.WORD
+        )
+        tarefa_entry.grid(row=5, column=1, sticky=tk.W)
+        tarefa_entry.insert(1.0, original_atendimento.get("tarefa", ""))
+        tarefa_entry.bind("<<Paste>>", self.colar_texto_com_substituicao)
+        tarefa_entry.config(state=tk.DISABLED)
+        # Adiciona menu de contexto
+        tarefa_entry.bind("<Button-3>", lambda e: self.criar_menu_contexto_generico(e, detalhes_window))
+
+        ttk.Label(fields_frame, text="Histórico de Eventos:").grid(row=6, column=0, sticky=tk.W)
+        eventos_text = scrolledtext.ScrolledText(fields_frame, width=30, height=10)
+        eventos_str = "\n".join(
+            [
+                f"{'Início' if e['tipo'] == 'inicio' else e['tipo'].capitalize()}: {e['data'].strftime('%d/%m/%Y')} {e['hora'].strftime('%H:%M')}"
+                for e in original_atendimento["eventos"]
+            ]
+        )
+        eventos_text.insert(tk.END, eventos_str)
+        eventos_text.grid(row=6, column=1, sticky=tk.W)
+        eventos_text.config(state=tk.DISABLED)
+
+        # Tempo total - agora trata strings e timedelta
+        tempo_total = original_atendimento.get("tempo_total", "N/A")
+        if isinstance(tempo_total, timedelta):
+            horas = int(tempo_total.total_seconds() // 3600)
+            minutos = int((tempo_total.total_seconds() % 3600) // 60)
+            tempo_str = f"{horas:02d}:{minutos:02d}"
+        else:
+            tempo_str = str(tempo_total)  # Pode ser "00:00", "Em aberto", etc.
+
+        ttk.Label(fields_frame, text="Tempo Total:").grid(row=7, column=0, sticky=tk.W)
+        tempo_label = ttk.Label(fields_frame, text=tempo_str)
+        tempo_label.grid(row=7, column=1, sticky=tk.W)
+
+        # Armazena referências aos widgets na janela
+        detalhes_window.problema_entry = problema_entry
+        detalhes_window.tarefa_entry = tarefa_entry
+        detalhes_window.eventos_text = eventos_text
+        detalhes_window.edit_button = edit_button
+        detalhes_window.save_button = save_button
+
+        # Configura atalhos para janela
+        self.configurar_atalhos_janela(
+            detalhes_window,
+            [problema_entry, tarefa_entry, eventos_text]
+        )
+        # Foca na janela de detalhes
+        detalhes_window.focus_set()
+
+        # Atualiza a interface
+        detalhes_window.update()
+
+    def salvar_edicao_busca(self, window):
+        """Salva as alterações feitas em um atendimento da busca"""
+        try:
+            # Obtém os dados da janela
+            original_atendimento = window.original_atendimento
+            is_tmp_atendimento = window.is_tmp_atendimento
+
+            # Cria uma cópia do atendimento original para modificar
+            new_atendimento = copy.deepcopy(original_atendimento)
+
+            # Atualiza os campos com os valores editados
+            new_atendimento["problema"] = window.problema_entry.get("1.0", tk.END).strip()
+            new_atendimento["tarefa"] = window.tarefa_entry.get("1.0", tk.END).strip()
+
+            # Parseia os eventos (se foram editados)
+            new_eventos = window.eventos_text.get("1.0", tk.END).strip()
+            try:
+                eventos = self.parse_eventos(new_eventos)
+                new_atendimento["eventos"] = eventos
+            except ValueError as e:
+                mostrar_erro(window, f"Formato inválido no histórico de eventos: {str(e)}")
+                return
+
+            # Recalcula o tempo total
+            tempo_total = self.calcular_tempo_total_eventos(eventos)
+            new_atendimento["tempo_total"] = tempo_total
+
+            # Diferencia entre atendimentos temporários e finalizados
+            if is_tmp_atendimento:
+                # Atualiza o tmp_atendimentos
+                chave_composta = f"{new_atendimento['cliente']} – {new_atendimento['usuario']}"
+                if chave_composta in self.tmp_atendimentos:
+                    self.tmp_atendimentos[chave_composta] = new_atendimento
+                    self.salvar_tmp_atendimentos()
+            else:
+                # Atualiza os arquivos na estrutura de pastas
+                data_inicio = new_atendimento["eventos"][0]["data"]
+                ano_dir = self.atendimentos_dir / str(data_inicio.year)
+                mes_dir = ano_dir / data_inicio.strftime("%B").lower()
+
+                # Atualiza todos.txt
+                todos_path = mes_dir / "todos.txt"
+                if todos_path.exists():
+                    with open(todos_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+
+                    original_block = self.formatar_atendimento(original_atendimento)
+                    new_block = self.formatar_atendimento(new_atendimento)
+                    new_content = content.replace(original_block, new_block)
+
+                    with open(todos_path, "w", encoding="utf-8") as f:
+                        f.write(new_content)
+
+                # Atualiza o arquivo do cliente
+                cliente_path = mes_dir / f"{new_atendimento['cliente']}.txt"
+                if cliente_path.exists():
+                    with open(cliente_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+
+                    new_content = content.replace(original_block, new_block)
+                    with open(cliente_path, "w", encoding="utf-8") as f:
+                        f.write(new_content)
+
+            # Atualiza a lista de resultados da busca
+            if hasattr(self, 'resultados_busca_completos'):
+                for i, atend in enumerate(self.resultados_busca_completos):
+                    if (atend.get("cliente") == original_atendimento["cliente"] and
+                        atend.get("usuario") == original_atendimento.get("usuario", "") and
+                        ((atend.get("eventos") and atend["eventos"][0]["data"] == original_atendimento["eventos"][0]["data"]) or
+                        (not atend.get("eventos") and not original_atendimento.get("eventos")))):
+
+                        self.resultados_busca_completos[i] = new_atendimento
+                        break
+
+            # Atualiza a treeview
+            self.executar_busca()
+
+            # Fecha a janela de detalhes
+            window.destroy()
+
+            mostrar_sucesso(self.janela_busca, "Atendimento atualizado com sucesso!")
+
+        except Exception as e:
+            mostrar_erro(window, f"Erro ao salvar alterações: {str(e)}")
+            print(f"Erro detalhado: {traceback.format_exc()}")
+
+    def remover_atendimento_busca(self, window):
+        """Remove um atendimento da janela de busca"""
+        original_atendimento = window.original_atendimento
+        is_tmp_atendimento = window.is_tmp_atendimento
+
+        confirmacao = messagebox.askyesno(
+            "Confirmar Remoção",
+            "Tem certeza que deseja remover este atendimento?",
+            parent=window
+        )
+
+        if not confirmacao:
+            return
+
+        try:
+            if is_tmp_atendimento:
+                # Remove de tmp_atendimentos
+                chave_composta = f"{original_atendimento['cliente']} – {original_atendimento['usuario']}"
+                if chave_composta in self.tmp_atendimentos:
+                    del self.tmp_atendimentos[chave_composta]
+                    self.salvar_tmp_atendimentos()
+            else:
+                # Remove dos arquivos na estrutura de pastas
+                data_inicio = original_atendimento["eventos"][0]["data"]
+                ano_dir = self.atendimentos_dir / str(data_inicio.year)
+                mes_dir = ano_dir / data_inicio.strftime("%B").lower()
+
+                # Remove de todos.txt
+                todos_path = mes_dir / "todos.txt"
+                if todos_path.exists():
+                    with open(todos_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+
+                    original_block = self.formatar_atendimento(original_atendimento)
+                    new_content = content.replace(original_block, "")
+
+                    with open(todos_path, "w", encoding="utf-8") as f:
+                        f.write(new_content)
+
+                # Remove do arquivo do cliente
+                cliente_path = mes_dir / f"{original_atendimento['cliente']}.txt"
+                if cliente_path.exists():
+                    with open(cliente_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+
+                    new_content = content.replace(original_block, "")
+                    with open(cliente_path, "w", encoding="utf-8") as f:
+                        f.write(new_content)
+
+                # Remove do status.txt
+                status_path = mes_dir / "status.txt"
+                if status_path.exists():
+                    with open(status_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+
+                    # Extrai apenas o número do atendimento
+                    numero_atendimento = original_atendimento.get("numero_atendimento", "").split(" - ")[-1]
+
+                    # Divide em blocos e remove o bloco correspondente
+                    blocos = content.split("**********************************\n")
+                    novo_conteudo = []
+
+                    for bloco in blocos:
+                        if f"Número do atendimento: {numero_atendimento}" not in bloco:
+                            novo_conteudo.append(bloco)
+
+                    # Reconstrói o arquivo
+                    new_content = "**********************************\n".join(novo_conteudo)
+                    if content.endswith("**********************************\n"):
+                        new_content += "\n**********************************\n"
+
+                    with open(status_path, "w", encoding="utf-8") as f:
+                        f.write(new_content)
+
+            # Atualiza a lista de resultados da busca
+            if hasattr(self, 'resultados_busca_completos'):
+                self.resultados_busca_completos = [
+                    atend for atend in self.resultados_busca_completos
+                    if not (atend.get("cliente") == original_atendimento["cliente"] and
+                        atend.get("usuario") == original_atendimento.get("usuario", "") and
+                        ((atend.get("eventos") and atend["eventos"][0]["data"] == original_atendimento["eventos"][0]["data"]) or
+                            (not atend.get("eventos") and not original_atendimento.get("eventos"))))
+                ]
+
+            # Atualiza a treeview
+            self.executar_busca()
+
+            # Fecha a janela de detalhes
+            window.destroy()
+
+            mostrar_sucesso(self.janela_busca, "Atendimento removido com sucesso!")
+
+        except Exception as e:
+            mostrar_erro(window, f"Erro ao remover atendimento: {str(e)}")
+            print(f"Erro detalhado: {traceback.format_exc()}")
+
+    def abrir_espelhamentos_busca(self):
+        """Abre a janela de espelhamentos para o cliente-usuário da busca"""
+        selecionado = self.busca_tree.selection()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione um item para abrir os espelhamentos.")
+            return
+
+        item = selecionado[0]
+        valores = self.busca_tree.item(item, 'values')
+
+        # Define o cliente e usuário nos campos principais
+        self.cliente_var.set(valores[0])
+        self.usuario_var.set(valores[1])
+
+        # Abre a janela de espelhamentos
+        self.criar_janela_espelhamentos()
 
 if __name__ == "__main__":
     root = tk.Tk()
