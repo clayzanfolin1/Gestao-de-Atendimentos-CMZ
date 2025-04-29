@@ -12,6 +12,6 @@ Código criado com o Linux, Kete e em Python 3.11 valeu comunidades!!
 
 Para gerar o executável é só ter o python e o pyinstaller instalados e no terminal  e executar este comando:
 
-pyinstaller --onefile --windowed atendimentos.py
+pyinstaller --onefile --add-data "dicionario:dicionario" --windowed atendimentos.py
 
 No Windows pode ser que seja necessário estar na pasta usuário\AppData\Roaming\Python\Python311\Scripts para executar o comando
