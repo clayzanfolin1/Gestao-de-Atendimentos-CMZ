@@ -13,6 +13,8 @@ from tkinter import Toplevel, Menu
 import traceback
 import sys
 import io
+import re
+from collections import defaultdict
 
 # Verifica se sys.stdout e sys.stderr não são None antes de reconfigurar
 if sys.stdout is not None:
@@ -114,8 +116,8 @@ class AtendimentoApp:
         # Define a pasta base de acordo com o sistema operacional
         if platform.system() == "Linux":
             # No Linux/macOS, usa a pasta home com um ponto no início
-            self.base_dir = Path.home() / ".cmz-atendimentos" #CMZ
-
+            self.base_dir = Path.home() / ".cmz-atendimentos"
+            
         else:
             # No Windows, usa a pasta AppData\Local
             self.base_dir = Path.home() / "AppData" / "Local" / "cmz-atendimentos"
@@ -181,6 +183,9 @@ class AtendimentoApp:
         # Referência à janela de espelhamentos
         self.janela_espelhamentos = None
 
+        # Configurar estilo para palavras erradas
+        self.configurar_pasta_dicionario()
+        self.configurar_estilo()
 
         self.estado_atual = ESTADOS[0]
         self.eventos = []
@@ -193,6 +198,9 @@ class AtendimentoApp:
         self.current_atendimento = None
         self.tmp_atendimentos = {}
         self.after_id = None
+
+        # Adicione este atributo para armazenar palavras ignoradas
+        self.palavras_ignoradas = set()
 
         self.carregar_clientes()
         self.carregar_atendimentos_abertos()
@@ -210,6 +218,28 @@ class AtendimentoApp:
 
 
         self.criar_widgets_principais()
+
+
+        # Sistema corretor ortográfico para os campos de texto
+        self.dicionario = set()
+        self.erros_widgets = {
+            self.problema_entry: {},
+            self.tarefa_entry: {},
+            self.dados_usuario_text: {}
+        }
+        self.menu_ativo = None
+        self.dicionario_carregado = False # Dicionário
+        self.correcoes = {}  # Dicionário de correções
+        self.carregar_dicionario() # método para carregar pt_BR.dic
+        self.carregar_correcoes()  # método para carregar correções.json
+
+        #self.after_id_verificacao = None #verificação automática
+        self.configurar_widget(self.problema_entry)
+        self.configurar_widget(self.tarefa_entry)
+        self.configurar_widget(self.dados_usuario_text)
+        self.configurar_widgets_contexto()
+
+
         self.criar_backup()
 
         # Configura atalhos para a janela principal
@@ -233,17 +263,44 @@ class AtendimentoApp:
         # Agenda a desativação da flag após 2 segundos
         self.root.after(1000, self.desativar_carregamento_inicial)  # 1000 ms = 2 segundos
 
+
+        # Variáveis para controle da verificação ortográfica
+        self.ultima_posicao = "1.0"
+        self.verificacao_pendente = False
+
     def criar_menu_contexto_generico(self, event, janela_pai):
         """
         Menu de contexto genérico que pode ser usado em qualquer janela
         - janela_pai: a janela onde o menu será exibido (self.root, self.janela_anotacoes, etc.)
         """
+        widget = event.widget
+
         # Fecha menu anterior se existir
         if hasattr(self, '_context_menu') and hasattr(self._context_menu, 'winfo_exists') and self._context_menu.winfo_exists():
             self._context_menu.unpost()
 
         # Cria novo menu
         self._context_menu = Menu(janela_pai, tearoff=0)
+
+        # Adiciona itens padrão para qualquer widget de texto
+        self._context_menu.add_command(label="Copiar", command=lambda: widget.event_generate("<<Copy>>"))
+        self._context_menu.add_command(label="Colar", command=lambda: widget.event_generate("<<Paste>>"))
+        self._context_menu.add_command(label="Recortar", command=lambda: widget.event_generate("<<Cut>>"))
+        self._context_menu.add_separator()
+        self._context_menu.add_command(label="Selecionar Tudo", command=lambda: widget.tag_add(tk.SEL, "1.0", tk.END))
+
+        # Adiciona verificação ortográfica se for um widget de texto relevante
+        if isinstance(widget, tk.Text) or isinstance(widget, scrolledtext.ScrolledText):
+            self._context_menu.add_separator()
+            self._context_menu.add_command(label="Verificar Ortografia (F7)", command=lambda: self.verificar_texto(widget))
+
+        # Exibe o menu
+        try:
+            self._context_menu.tk_popup(event.x_root, event.y_root)
+            widget.bind("<Button-1>", lambda e: self._context_menu.destroy(), add="+")
+            self._context_menu.bind("<Unmap>", lambda e: widget.unbind("<Button-1>"))
+        finally:
+            pass
 
         # Função para fechar o menu de forma segura
         def fechar_menu():
@@ -288,8 +345,79 @@ class AtendimentoApp:
         self._context_menu.bind("<Unmap>", lambda e: fechar_menu())
 
     def criar_menu_contexto(self, event):
-        """Menu de contexto para a janela principal"""
-        self.criar_menu_contexto_generico(event, self.root)
+        """Menu de contexto unificado para todos os widgets de texto"""
+        widget = event.widget
+
+        # Verifica se o widget está na lista de widgets com verificação ortográfica
+        if widget not in self.erros_widgets:
+            # Se não estiver, cria um menu de contexto genérico
+            self.criar_menu_contexto_generico(event, widget.master)
+            return
+
+        # Fecha menu anterior se existir
+        if hasattr(self, '_context_menu') and self._context_menu.winfo_exists():
+            self._context_menu.destroy()
+
+        # Verifica se o clique foi em uma palavra com erro ortográfico no widget específico
+        if widget in self.erros_widgets:
+            posicao = widget.index(f"@{event.x},{event.y}")
+
+            # Procura apenas nos erros do widget atual
+            for (start, end), palavra_errada in self.erros_widgets[widget].items():
+                if widget.compare(posicao, ">=", start) and widget.compare(posicao, "<=", end):
+                    self.palavra_errada = palavra_errada
+                    self.posicao_erro = (start, end)
+                    self.widget_atual = widget  # Armazena o widget atual
+                    self.criar_menu_correcao(event, widget)
+                    return
+
+        # Cria o menu de contexto genérico
+        self._context_menu = tk.Menu(self.root, tearoff=0)
+
+        # Adiciona itens padrão
+        self._context_menu.add_command(label="Copiar", command=lambda: widget.event_generate("<<Copy>>"))
+        self._context_menu.add_command(label="Colar", command=lambda: widget.event_generate("<<Paste>>"))
+        self._context_menu.add_command(label="Recortar", command=lambda: widget.event_generate("<<Cut>>"))
+        self._context_menu.add_separator()
+        self._context_menu.add_command(label="Selecionar Tudo",
+                                    command=lambda: widget.tag_add(tk.SEL, "1.0", tk.END))
+
+        # Adiciona verificação ortográfica se for um campo de texto relevante
+        if widget in [self.problema_entry, self.tarefa_entry]:
+            self._context_menu.add_separator()
+            self._context_menu.add_command(label="Verificar Ortografia (F7)",
+                                        command=lambda: self.verificar_texto(widget))
+
+        # Exibe o menu
+        try:
+            self._context_menu.tk_popup(event.x_root, event.y_root)
+
+            # Configura para fechar o menu quando clicar fora
+            widget.bind("<Button-1>", lambda e: self._context_menu.destroy(), add="+")
+            self._context_menu.bind("<Unmap>", lambda e: widget.unbind("<Button-1>"))
+        finally:
+            pass
+
+    def remover_widget_erros(self, widget):
+        """Remove um widget do dicionário de erros quando sua janela é fechada"""
+        if widget in self.erros_widgets:
+            del self.erros_widgets[widget]
+
+    def configurar_widgets_contexto(self):
+        """Configura os menus de contexto para todos os widgets de texto"""
+        widgets = [self.problema_entry, self.tarefa_entry, self.dados_usuario_text]
+
+        for widget in widgets:
+            # Remove bindings antigos se existirem
+            widget.bind("<Button-3>", lambda e: None)  # Remove binding anterior
+            widget.bind("<Button-3>", self.criar_menu_contexto)
+
+            # Configura tags para erros ortográficos
+            widget.tag_config("erro_ortografico", foreground="red", underline=True)
+
+            # Configura verificação ortográfica
+            widget.bind("<KeyRelease>", lambda e: self.verificar_palavra_na_posicao(e.widget, "insert"))
+            widget.bind("<F7>", lambda e: self.verificar_texto(e.widget))
 
     def criar_menu_contexto_anotacoes(self, event):
         """Menu de contexto para a janela de anotações"""
@@ -409,6 +537,7 @@ class AtendimentoApp:
 
         # Itens do menu normais
         menubar.add_command(label="Diretório", command=self.abrir_diretorio)
+        menubar.add_command(label="Clientes", command=self.criar_janela_clientes)
         menubar.add_command(label="Espelhamentos", command=self.criar_janela_espelhamentos)
         menubar.add_command(label="Anotações", command=self.criar_janela_anotacoes)
         menubar.add_command(label="Alterar Operador", command=self.alterar_operador)
@@ -491,7 +620,7 @@ class AtendimentoApp:
         Exibe uma caixa de mensagem com informações sobre o desenvolvedor, licença e versão do software.
         """
         sobre_texto = (
-            "Desenvolvedor: Clayton Magalhães Zanfolin   \n\n" "Direitos de uso: Licença Pública Geral GNU versão 2.0   \n\n" "Versão: 1.8   "
+            "Desenvolvedor: Clayton Magalhães Zanfolin   \n\n" "Direitos de uso: Licença Pública Geral GNU versão 2.0   \n\n" "Versão: 1.9.2   "
         )
         messagebox.showinfo("Sobre", sobre_texto)
 
@@ -586,6 +715,256 @@ class AtendimentoApp:
             }
         with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(tmp_serializado, f, indent=2, ensure_ascii=False)
+
+    #Janela Detalhes dos Clientes
+
+    def criar_janela_clientes(self):
+        """Cria a janela de gerenciamento de clientes e usuários"""
+        # Verifica se a janela já existe
+        if hasattr(self, 'janela_clientes') and self.janela_clientes.winfo_exists():
+            self.janela_clientes.lift()  # Traz para frente se já existir
+            return
+
+        # Inicializa o atributo
+        self.cliente_selecionado = None
+
+        # Cria a nova janela
+        self.janela_clientes = tk.Toplevel(self.root)
+        self.janela_clientes.title("Detalhes dos Clientes")
+        self.janela_clientes.geometry("800x600")
+
+        # Frame principal
+        main_frame = ttk.Frame(self.janela_clientes)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Frame para os botões de ação
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=5)
+
+        # Botões de ação
+        ttk.Button(btn_frame, text="Adicionar Cliente", command=self.adicionar_cliente_janela).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Adicionar Usuário", command=self.adicionar_usuario_janela).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Remover Cliente", command=self.remover_cliente_janela).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Remover Usuário", command=self.remover_usuario_janela).pack(side=tk.LEFT, padx=2)
+
+        # Frame para as listas
+        list_frame = ttk.Frame(main_frame)
+        list_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Lista de clientes (esquerda) com fonte personalizada
+        ttk.Label(list_frame, text="Clientes").grid(row=0, column=0, sticky=tk.W)
+        self.lista_clientes = tk.Listbox(
+            list_frame,
+            width=30,
+            height=20,
+            font=('Helvetica', 10)
+        )
+        self.lista_clientes.grid(row=1, column=0, padx=5, pady=5, sticky=tk.NSEW)
+        self.lista_clientes.bind('<<ListboxSelect>>', self.carregar_usuarios_cliente)
+
+        # Lista de usuários (direita)
+        ttk.Label(list_frame, text="Usuários").grid(row=0, column=1, sticky=tk.W)
+        self.lista_usuarios = tk.Listbox(
+            list_frame,
+            width=30,
+            height=20,
+            font=('Helvetica', 10)
+        )
+        self.lista_usuarios.grid(row=1, column=1, padx=5, pady=5, sticky=tk.NSEW)
+
+        # Adiciona um label para mostrar o cliente selecionado
+        self.cliente_selecionado_label = ttk.Label(
+            main_frame,
+            text="Cliente selecionado: ",
+            font=('Helvetica', 10)
+        )
+        self.cliente_selecionado_label.pack()
+
+        # Configurar pesos para expansão
+        list_frame.grid_columnconfigure(0, weight=1)
+        list_frame.grid_columnconfigure(1, weight=1)
+        list_frame.grid_rowconfigure(1, weight=1)
+
+        # Carrega os clientes
+        self.atualizar_lista_clientes()
+
+        # Configura o protocolo para fechamento correto
+        self.janela_clientes.protocol("WM_DELETE_WINDOW", self.fechar_janela_clientes)
+
+    def fechar_janela_clientes(self):
+        """Fecha a janela de clientes corretamente"""
+        if hasattr(self, 'janela_clientes'):
+            self.janela_clientes.destroy()
+            del self.janela_clientes
+
+    def atualizar_lista_clientes(self):
+        """Atualiza a lista de clientes na janela"""
+        if hasattr(self, 'lista_clientes'):
+            self.lista_clientes.delete(0, tk.END)
+            for cliente in sorted(self.clientes, key=lambda x: x.lower()):
+                self.lista_clientes.insert(tk.END, cliente)
+
+    def carregar_usuarios_cliente(self, event=None):
+        """Carrega os usuários do cliente selecionado"""
+        selecionado = self.lista_clientes.curselection()
+        if not selecionado:
+            return
+
+        # Armazena e mostra o cliente selecionado
+        self.cliente_selecionado = self.lista_clientes.get(selecionado[0])
+        self.cliente_selecionado_label.config(
+            text=f"Cliente selecionado: {self.cliente_selecionado}",
+            font=('Helvetica', 10, 'bold')
+        )
+
+        # Carrega os usuários
+        usuarios = self.carregar_usuarios_para_cliente(self.cliente_selecionado)
+
+        if hasattr(self, 'lista_usuarios'):
+            self.lista_usuarios.delete(0, tk.END)
+            for usuario in sorted(usuarios, key=lambda x: x.lower()):
+                self.lista_usuarios.insert(tk.END, usuario)
+
+    def adicionar_cliente_janela(self):
+        """Adiciona um novo cliente através da janela de diálogo"""
+        novo_cliente = simpledialog.askstring("Adicionar Cliente", "Nome do novo cliente:", parent=self.janela_clientes)
+        if novo_cliente and novo_cliente.strip():
+            novo_cliente = novo_cliente.strip()
+            if novo_cliente not in self.clientes:
+                # Adiciona ao arquivo clientes.txt
+                clientes_file = self.base_dir / "clientes.txt"
+                with open(clientes_file, "a", encoding="utf-8") as f:
+                    f.write(f"{novo_cliente}\n")
+
+                # Atualiza a lista de clientes
+                self.clientes.append(novo_cliente)
+                self.cliente_combobox['values'] = self.clientes
+                self.atualizar_lista_clientes()
+
+                # Ordena os arquivos
+                self.ordenar_arquivos_alfabeticamente()
+
+                mostrar_sucesso(self.janela_clientes, "Cliente adicionado com sucesso!")
+            else:
+                mostrar_erro(self.janela_clientes, "Este cliente já existe!")
+
+    def adicionar_usuario_janela(self):
+        """Adiciona um novo usuário ao cliente selecionado"""
+        selecionado = self.lista_clientes.curselection()
+        if not selecionado:
+            mostrar_erro(self.janela_clientes, "Selecione um cliente primeiro!")
+            return
+
+        cliente = self.lista_clientes.get(selecionado[0])
+        novo_usuario = simpledialog.askstring("Adicionar Usuário", f"Nome do novo usuário para {cliente}:", parent=self.janela_clientes)
+
+        if novo_usuario and novo_usuario.strip():
+            novo_usuario = novo_usuario.strip()
+            usuarios = self.carregar_usuarios_para_cliente(cliente)
+
+            if novo_usuario in usuarios:
+                mostrar_erro(self.janela_clientes, "Este usuário já existe para este cliente!")
+                return
+
+            # Adiciona o usuário
+            self.salvar_usuario_para_cliente(cliente, novo_usuario)
+
+            # Atualiza as listas
+            self.carregar_usuarios_cliente()
+            self.atualizar_usuarios_combobox()
+
+            mostrar_sucesso(self.janela_clientes, "Usuário adicionado com sucesso!")
+
+    def remover_cliente_janela(self):
+        """Remove o cliente selecionado e todos os seus usuários"""
+        selecionado = self.lista_clientes.curselection()
+        if not selecionado:
+            mostrar_erro(self.janela_clientes, "Selecione um cliente para remover!")
+            return
+
+        cliente = self.lista_clientes.get(selecionado[0])
+
+        # Confirmação
+        confirmacao = messagebox.askyesno(
+            "Confirmar Remoção",
+            f"Tem certeza que deseja remover o cliente '{cliente}' e todos os seus usuários?",
+            parent=self.janela_clientes
+        )
+
+        if not confirmacao:
+            return
+
+        try:
+            # Remove do arquivo clientes.txt
+            clientes_file = self.base_dir / "clientes.txt"
+            with open(clientes_file, "r", encoding="utf-8") as f:
+                linhas = [linha.strip() for linha in f.readlines() if linha.strip() != cliente]
+
+            with open(clientes_file, "w", encoding="utf-8") as f:
+                f.write("\n".join(linhas) + "\n")
+
+            # Remove o arquivo de usuários do cliente
+            usuario_file = self.usuarios_dir / f"{cliente}.txt"
+            if usuario_file.exists():
+                usuario_file.unlink()
+
+            # Remove da lista de clientes
+            self.clientes.remove(cliente)
+            self.cliente_combobox['values'] = self.clientes
+
+            # Atualiza as listas
+            self.atualizar_lista_clientes()
+            self.lista_usuarios.delete(0, tk.END)
+
+            mostrar_sucesso(self.janela_clientes, "Cliente removido com sucesso!")
+
+        except Exception as e:
+            mostrar_erro(self.janela_clientes, f"Erro ao remover cliente: {str(e)}")
+
+    def remover_usuario_janela(self):
+        """Remove o usuário selecionado do cliente selecionado"""
+        # Verifica se há usuário selecionado
+        usuario_selecionado = self.lista_usuarios.curselection()
+        if not usuario_selecionado:
+            mostrar_erro(self.janela_clientes, "Selecione um usuário para remover!")
+            return
+
+        # Verifica se temos um cliente selecionado armazenado
+        if not hasattr(self, 'cliente_selecionado') or not self.cliente_selecionado:
+            mostrar_erro(self.janela_clientes, "Nenhum cliente selecionado!")
+            return
+
+        cliente = self.cliente_selecionado
+        usuario = self.lista_usuarios.get(usuario_selecionado[0])
+
+        # Confirmação
+        confirmacao = messagebox.askyesno(
+            "Confirmar Remoção",
+            f"Tem certeza que deseja remover o usuário '{usuario}' do cliente '{cliente}'?",
+            parent=self.janela_clientes
+        )
+
+        if not confirmacao:
+            return
+
+        try:
+            # Remove o usuário do arquivo
+            usuario_file = self.usuarios_dir / f"{cliente}.txt"
+            if usuario_file.exists():
+                with open(usuario_file, "r", encoding="utf-8") as f:
+                    usuarios = [linha.strip() for linha in f.readlines() if linha.strip() != usuario]
+
+                with open(usuario_file, "w", encoding="utf-8") as f:
+                    f.write("\n".join(usuarios) + "\n")
+
+            # Atualiza as listas
+            self.carregar_usuarios_cliente()
+            self.atualizar_usuarios_combobox()
+
+            mostrar_sucesso(self.janela_clientes, "Usuário removido com sucesso!")
+
+        except Exception as e:
+            mostrar_erro(self.janela_clientes, f"Erro ao remover usuário: {str(e)}")
 
     def criar_widgets_principais(self):
         main_frame = ttk.Frame(self.root)
@@ -1164,6 +1543,7 @@ class AtendimentoApp:
             self.atendimento_frame, height=4, width=45
         )
         self.problema_entry.grid(row=2, column=0, columnspan=2, padx=5, pady=2)
+
         # Botão direito abre menu
         self.problema_entry.bind("<Button-3>", self.criar_menu_contexto)
         # Adiciona binding para salvar em tempo real
@@ -2146,7 +2526,7 @@ class AtendimentoApp:
 
         detalhes_window = tk.Toplevel(self.root)
         detalhes_window.title("Detalhes do Atendimento")
-        detalhes_window.geometry("720x580")
+        detalhes_window.geometry("800x580")
 
         # Armazena o número do atendimento na janela
         detalhes_window.numero_atendimento = numero_atendimento
@@ -2174,6 +2554,13 @@ class AtendimentoApp:
         )
         save_button.pack(side=tk.LEFT, padx=5)
         save_button.config(state=tk.DISABLED)
+
+        # Adiciona o novo botão "Retornar ao Atendimento"
+        ttk.Button(
+            btn_frame,
+            text="Retornar ao Atendimento",
+            command=lambda: self.retornar_ao_atendimento(original_atendimento, detalhes_window)
+        ).pack(side=tk.LEFT, padx=5)
 
         remove_button = ttk.Button(
             btn_frame,
@@ -2259,7 +2646,7 @@ class AtendimentoApp:
         ttk.Label(fields_frame, text="Problema a resolver:").grid(row=4, column=0, sticky=tk.W)
         problema_entry = scrolledtext.ScrolledText(
             fields_frame,
-            width=80,
+            width=90,
             height=4,
             wrap=tk.WORD
         )
@@ -2270,10 +2657,14 @@ class AtendimentoApp:
         # Adiciona menu de contexto
         problema_entry.bind("<Button-3>", lambda e: self.criar_menu_contexto_generico(e, detalhes_window))
 
+        # Configurar verificação ortográfica para o widget
+        self.erros_widgets[problema_entry] = {}
+        self.configurar_widget(problema_entry)
+
         ttk.Label(fields_frame, text="Tarefa realizada:").grid(row=5, column=0, sticky=tk.W)
         tarefa_entry = scrolledtext.ScrolledText(
             fields_frame,
-            width=80,
+            width=90,
             height=8,
             wrap=tk.WORD
         )
@@ -2281,8 +2672,13 @@ class AtendimentoApp:
         tarefa_entry.insert(1.0, atendimento.get("tarefa", ""))
         tarefa_entry.bind("<<Paste>>", self.colar_texto_com_substituicao)
         tarefa_entry.config(state=tk.DISABLED)
+
         # Adiciona menu de contexto
         tarefa_entry.bind("<Button-3>", lambda e: self.criar_menu_contexto_generico(e, detalhes_window))
+
+        # Configurar verificação ortográfica para o widget
+        self.erros_widgets[tarefa_entry] = {}
+        self.configurar_widget(tarefa_entry)
 
         ttk.Label(fields_frame, text="Histórico de Eventos:").grid(row=6, column=0, sticky=tk.W)
         eventos_text = scrolledtext.ScrolledText(fields_frame, width=30, height=10)
@@ -3057,6 +3453,11 @@ class AtendimentoApp:
                 self.janela_anotacoes,
                 [self.anotacoes_text]
             )
+
+            # Adiciona o widget de anotações ao dicionário de erros
+            if hasattr(self, 'anotacoes_text'):
+                self.erros_widgets[self.anotacoes_text] = {}
+                self.configurar_widget(self.anotacoes_text)
 
         except Exception as e:
             messagebox.showerror("Erro", f"Ocorreu um erro ao abrir as anotações:\n{str(e)}")
@@ -4198,7 +4599,7 @@ class AtendimentoApp:
         # Cria a janela de detalhes como filha da janela de busca
         detalhes_window = tk.Toplevel(self.janela_busca)
         detalhes_window.title("Detalhes do Atendimento")
-        detalhes_window.geometry("720x580")
+        detalhes_window.geometry("800x580")
 
         # Armazena informações importantes na janela
         detalhes_window.numero_atendimento = numero_atendimento
@@ -4231,6 +4632,14 @@ class AtendimentoApp:
         )
         save_button.pack(side=tk.LEFT, padx=5)
         save_button.config(state=tk.DISABLED)
+
+        # Adiciona o novo botão "Retornar ao Atendimento" se não for um atendimento em aberto
+        if not is_tmp_atendimento and original_atendimento.get("situacao") != "Cancelado":
+            ttk.Button(
+                btn_frame,
+                text="Retornar ao Atendimento",
+                command=lambda: self.retornar_ao_atendimento(original_atendimento, detalhes_window)
+            ).pack(side=tk.LEFT, padx=5)
 
         # Botão Remover - modificado para funcionar com busca
         remove_button = ttk.Button(
@@ -4319,7 +4728,7 @@ class AtendimentoApp:
         ttk.Label(fields_frame, text="Problema a resolver:").grid(row=4, column=0, sticky=tk.W)
         problema_entry = scrolledtext.ScrolledText(
             fields_frame,
-            width=80,
+            width=90,
             height=4,
             wrap=tk.WORD
         )
@@ -4327,13 +4736,18 @@ class AtendimentoApp:
         problema_entry.insert(1.0, original_atendimento.get("problema", ""))
         problema_entry.bind("<<Paste>>", self.colar_texto_com_substituicao)
         problema_entry.config(state=tk.DISABLED)
+
         # Adiciona menu de contexto
         problema_entry.bind("<Button-3>", lambda e: self.criar_menu_contexto_generico(e, detalhes_window))
+
+        # Configurar verificação ortográfica para o widget
+        self.erros_widgets[problema_entry] = {}
+        self.configurar_widget(problema_entry)
 
         ttk.Label(fields_frame, text="Tarefa realizada:").grid(row=5, column=0, sticky=tk.W)
         tarefa_entry = scrolledtext.ScrolledText(
             fields_frame,
-            width=80,
+            width=90,
             height=8,
             wrap=tk.WORD
         )
@@ -4341,8 +4755,13 @@ class AtendimentoApp:
         tarefa_entry.insert(1.0, original_atendimento.get("tarefa", ""))
         tarefa_entry.bind("<<Paste>>", self.colar_texto_com_substituicao)
         tarefa_entry.config(state=tk.DISABLED)
+
         # Adiciona menu de contexto
         tarefa_entry.bind("<Button-3>", lambda e: self.criar_menu_contexto_generico(e, detalhes_window))
+
+        # Configurar verificação ortográfica para o widget
+        self.erros_widgets[tarefa_entry] = {}
+        self.configurar_widget(tarefa_entry)
 
         ttk.Label(fields_frame, text="Histórico de Eventos:").grid(row=6, column=0, sticky=tk.W)
         eventos_text = scrolledtext.ScrolledText(fields_frame, width=30, height=10)
@@ -4585,6 +5004,591 @@ class AtendimentoApp:
 
         # Abre a janela de espelhamentos
         self.criar_janela_espelhamentos()
+
+    #Função Retornar ao Atendimento
+    def retornar_ao_atendimento(self, atendimento, window):
+        """Transforma um atendimento finalizado em um atendimento em andamento novamente"""
+        # Verifica se o atendimento está finalizado
+        if not atendimento.get("finalizado", True):
+            mostrar_erro(window, "Este atendimento já está em andamento.")
+            return
+
+        # Confirmação do usuário
+        confirmacao = messagebox.askyesno(
+            "Confirmar Retorno",
+            "Tem certeza que deseja retornar este atendimento para 'Em andamento'?\n"
+            "O registro de 'Fim' será alterado para 'Pausa'.",
+            parent=window
+        )
+
+        if not confirmacao:
+            return
+
+        try:
+            # Obtém a data e hora atuais
+            data_atual = datetime.now().date()
+            hora_atual = datetime.now().time()
+
+            # Cria uma cópia do atendimento para modificar
+            novo_atendimento = copy.deepcopy(atendimento)
+
+            # Remove o evento de fim se existir
+            eventos = novo_atendimento["eventos"]
+            if eventos and eventos[-1]["tipo"] == "fim":
+                eventos.pop()  # Remove o evento de fim
+
+            # Adiciona um evento de pausa com a data/hora atual
+            eventos.append({
+                "tipo": "pausa",
+                "data": data_atual,
+                "hora": hora_atual
+            })
+
+            # Atualiza o estado do atendimento
+            novo_atendimento["finalizado"] = False
+            novo_atendimento["estado"] = "pausado"
+
+            # Obtém o cliente e usuário
+            cliente = novo_atendimento["cliente"]
+            usuario = novo_atendimento.get("usuario", "")
+
+            # Cria a chave composta para o tmp_atendimentos
+            chave_composta = f"{cliente} – {usuario}"
+
+            # Adiciona ao tmp_atendimentos
+            self.tmp_atendimentos[chave_composta] = novo_atendimento
+            self.salvar_tmp_atendimentos()
+
+            # Remove o atendimento do arquivo todos.txt
+            data_inicio = novo_atendimento["eventos"][0]["data"]
+            ano_dir = self.atendimentos_dir / str(data_inicio.year)
+            mes_dir = ano_dir / data_inicio.strftime("%B").lower()
+
+            todos_path = mes_dir / "todos.txt"
+            if todos_path.exists():
+                with open(todos_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+
+                original_block = self.formatar_atendimento(atendimento)
+                new_content = content.replace(original_block, "")
+
+                with open(todos_path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+
+            # Remove do arquivo do cliente
+            cliente_path = mes_dir / f"{cliente}.txt"
+            if cliente_path.exists():
+                with open(cliente_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+
+                new_content = content.replace(original_block, "")
+                with open(cliente_path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+
+            # Remove do status.txt
+            status_path = mes_dir / "status.txt"
+            if status_path.exists():
+                with open(status_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+
+                numero_atendimento = novo_atendimento.get("numero_atendimento", "").split(" - ")[-1]
+                blocos = content.split("**********************************\n")
+                novo_conteudo = []
+
+                for bloco in blocos:
+                    if f"Número do atendimento: {numero_atendimento}" not in bloco:
+                        novo_conteudo.append(bloco)
+
+                new_content = "**********************************\n".join(novo_conteudo)
+                if content.endswith("**********************************\n"):
+                    new_content += "\n**********************************\n"
+
+                with open(status_path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+
+            # Atualiza a interface
+            self.cliente_var.set(cliente)
+            self.usuario_var.set(usuario)
+            self.problema_entry.delete("1.0", tk.END)
+            self.problema_entry.insert(tk.END, novo_atendimento["problema"])
+            self.tarefa_entry.delete("1.0", tk.END)
+            self.tarefa_entry.insert(tk.END, novo_atendimento["tarefa"])
+
+            # Carrega os dados do usuário
+            if cliente and usuario:
+                filename = f"{cliente}-{usuario}.txt".replace("/", "_")
+                file_path = self.dados_usuario_dir / filename
+                self.dados_usuario_text.delete("1.0", tk.END)
+                if file_path.exists():
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        self.dados_usuario_text.insert(tk.END, f.read())
+
+            # Configura o atendimento atual
+            self.current_atendimento = novo_atendimento
+            self.eventos = novo_atendimento["eventos"]
+            self.estado_atual = "pausado"
+            self.atualizar_interface_atendimento()
+
+            # Fecha a janela de detalhes
+            window.destroy()
+
+            # Recarrega o histórico
+            self.carregar_historico()
+
+            mostrar_sucesso(self.root, "Atendimento retornado para 'Em andamento' com sucesso!")
+
+        except Exception as e:
+            mostrar_erro(window, f"Erro ao retornar atendimento: {str(e)}")
+            print(f"Erro detalhado: {traceback.format_exc()}")
+
+    #Sistema de Correção
+
+    def configurar_pasta_dicionario(self):
+        """Configura a pasta de dicionário e copia os arquivos se necessário"""
+        # Cria a pasta dicionario dentro de configuracoes se não existir
+        self.dicionario_dir = self.config_dir / "dicionario"
+        self.dicionario_dir.mkdir(parents=True, exist_ok=True)
+
+        # Caminhos dos arquivos de dicionário
+        pt_br_dic = self.dicionario_dir / "pt_BR.dic"
+        correcao_json = self.dicionario_dir / "correcao.json"
+
+        # Verifica se os arquivos já existem na pasta de destino
+        if not pt_br_dic.exists() or not correcao_json.exists():
+            try:
+                # Tenta copiar os arquivos da pasta atual para a pasta de dicionário
+                import shutil
+
+                # Lista de possíveis locais onde os arquivos podem estar
+                locais_origem = [
+                    Path(__file__).parent,  # Pasta do script
+                    Path(__file__).parent / "dicionario",  # Subpasta dicionario
+                    Path.cwd(),  # Diretório de trabalho atual
+                    Path.cwd() / "dicionario"  # Subpasta dicionario no diretório de trabalho
+                ]
+
+                # Procura os arquivos em todos os locais possíveis
+                origem_pt_br = None
+                origem_correcao = None
+
+                for local in locais_origem:
+                    if not origem_pt_br and (local / "pt_BR.dic").exists():
+                        origem_pt_br = local / "pt_BR.dic"
+                    if not origem_correcao and (local / "correcao.json").exists():
+                        origem_correcao = local / "correcao.json"
+                    if origem_pt_br and origem_correcao:
+                        break
+
+                # Copia os arquivos se encontrados
+                if origem_pt_br and not pt_br_dic.exists():
+                    shutil.copy(origem_pt_br, pt_br_dic)
+                    print(f"Arquivo pt_BR.dic copiado de {origem_pt_br} para {pt_br_dic}")
+
+                if origem_correcao and not correcao_json.exists():
+                    shutil.copy(origem_correcao, correcao_json)
+                    print(f"Arquivo correcao.json copiado de {origem_correcao} para {correcao_json}")
+
+            except Exception as e:
+                print(f"Erro ao copiar arquivos de dicionário: {e}")
+
+        return pt_br_dic, correcao_json
+
+    def configurar_estilo(self):
+        """Configura o estilo visual para palavras com erro ortográfico"""
+        style = ttk.Style()
+        style.configure("Erro.TLabel", foreground="red")
+
+    def carregar_dicionario(self):
+        """Carrega o dicionário de forma otimizada com indexação por prefixo"""
+        try:
+            pt_br_dic, _ = self.configurar_pasta_dicionario()
+
+            if pt_br_dic.exists():
+                # Usa um conjunto para armazenar as palavras
+                self.dicionario = set()
+                # Cria um índice por prefixo para buscas mais rápidas
+                self.indice_prefixo = {}
+
+                with open(pt_br_dic, "r", encoding="utf-8") as f:
+                    for linha in f:
+                        palavra = linha.strip().split("/")[0].lower()
+                        if palavra:
+                            self.dicionario.add(palavra)
+                            # Indexa por prefixo de 3 caracteres
+                            prefixo = palavra[:3]
+                            if prefixo not in self.indice_prefixo:
+                                self.indice_prefixo[prefixo] = []
+                            self.indice_prefixo[prefixo].append(palavra)
+
+                print(f"Dicionário carregado com {len(self.dicionario)} palavras e indexado por prefixo.")
+                self.dicionario_carregado = True
+            else:
+                print("Arquivo pt_BR.dic não encontrado.")
+                self.dicionario_carregado = False
+        except Exception as e:
+            print(f"Erro ao carregar dicionário: {e}")
+            self.dicionario_carregado = False
+
+    def carregar_correcoes(self):
+        """Carrega e inverte o arquivo correcao.json da pasta config/dicionario"""
+        try:
+            # Configura a pasta e obtém os caminhos dos arquivos
+            _, correcao_json = self.configurar_pasta_dicionario()
+
+            if correcao_json.exists():
+                with open(correcao_json, "r", encoding="utf-8") as f:
+                    correcoes_originais = json.load(f)
+
+                # Inverte o dicionário: de correto->erros para erro->correções
+                self.correcoes = {}
+                for correto, erros in correcoes_originais.items():
+                    for erro in erros:
+                        if erro not in self.correcoes:
+                            self.correcoes[erro] = []
+                        if correto not in self.correcoes[erro]:
+                            self.correcoes[erro].append(correto)
+
+                print(f"Dicionário de correções carregado com {len(self.correcoes)} entradas.")
+                return True
+            else:
+                print(f"Arquivo correcao.json não encontrado em {correcao_json}")
+                return False
+        except Exception as e:
+            print(f"Erro ao carregar correcao.json: {e}")
+            return False
+
+    def verificar_texto(self, widget):
+        """Verifica todo o texto em busca de erros ortográficos no widget específico"""
+        if not self.dicionario_carregado or widget not in self.erros_widgets:
+            return
+
+        try:
+            # Remove todas as marcações de erro existentes neste widget
+            widget.tag_remove("erro_ortografico", "1.0", tk.END)
+            self.erros_widgets[widget].clear()
+
+            # Obtém todo o texto
+            texto = widget.get("1.0", tk.END)
+
+            # Divide o texto em palavras e verifica cada uma
+            palavras = texto.split()
+            for palavra in set(palavras):  # Verifica cada palavra única
+                if self.is_palavra_valida(palavra) and palavra.lower() not in self.dicionario:
+                    self.marcar_palavra_errada(widget, palavra)
+        except Exception as e:
+            print(f"Erro ao verificar texto: {e}")
+
+    def verificar_palavra_na_posicao(self, widget, index):
+        """Verifica a ortografia da palavra na posição do índice para um widget específico"""
+        if not self.dicionario_carregado:
+            return
+
+        try:
+            start = widget.index(f"{index} wordstart")
+            end = widget.index(f"{index} wordend")
+            palavra = widget.get(start, end)
+
+            # Remove qualquer marcação de erro anterior nesta palavra
+            widget.tag_remove("erro_ortografico", start, end)
+            if (start, end) in self.erros_widgets[widget]:
+                del self.erros_widgets[widget][(start, end)]
+
+            # Verifica se é uma palavra válida para verificação e não está na lista de ignoradas
+            if self.is_palavra_valida(palavra) and palavra.lower() not in self.palavras_ignoradas:
+                palavra_limpa = palavra.rstrip('.,;:?!)"\'')
+                if palavra_limpa.lower() not in self.dicionario:
+                    widget.tag_add("erro_ortografico", start, end)
+                    self.erros_widgets[widget][(start, end)] = palavra_limpa
+
+        except tk.TclError:
+            pass
+
+    def marcar_palavra_errada(self, widget, palavra):
+        """Marca todas as ocorrências de uma palavra errada no widget específico"""
+        # Verifica se é uma palavra válida para verificação e não está na lista de ignoradas
+        if not self.is_palavra_valida(palavra) or palavra.lower() in self.palavras_ignoradas:
+            return
+
+        palavra_limpa = palavra.rstrip('.,;:?!)"\'')
+        start_idx = "1.0"
+        while True:
+            start_idx = widget.search(r'\m' + re.escape(palavra) + r'\M',
+                                    start_idx,
+                                    stopindex=tk.END,
+                                    regexp=True)
+            if not start_idx:
+                break
+            end_idx = f"{start_idx}+{len(palavra)}c"
+
+            # Verifica se é exatamente a palavra (não parte de outra)
+            contexto_inicio = widget.get(f"{start_idx} -1c", start_idx)
+            contexto_fim = widget.get(end_idx, f"{end_idx}+1c")
+
+            if (not contexto_inicio or not contexto_inicio.isalnum()) and \
+            (not contexto_fim or not contexto_fim.isalnum()):
+                widget.tag_add("erro_ortografico", start_idx, end_idx)
+                self.erros_widgets[widget][(start_idx, end_idx)] = palavra_limpa
+
+            start_idx = end_idx
+
+    def obter_sugestoes(self, palavra):
+        """Retorna sugestões de correção para a palavra de forma otimizada"""
+        palavra_lower = palavra.lower()
+        sugestoes = []
+
+        # 1. Verifica primeiro no dicionário de correções personalizadas (mais rápido)
+        if palavra_lower in self.correcoes:
+            return self.correcoes[palavra_lower][:10]  # Limita a 10 sugestões
+
+        # 2. Busca por prefixos comuns (mais rápido que Levenshtein)
+        prefixo = palavra_lower[:3]
+        candidatos = [p for p in self.dicionario if p.startswith(prefixo)]
+
+        # 3. Aplica Levenshtein apenas nos candidatos com prefixo similar
+        for candidato in candidatos:
+            if abs(len(candidato) - len(palavra_lower)) <= 2:
+                distancia = self.distancia_levenshtein_otimizada(candidato, palavra_lower)
+                if distancia <= 2:
+                    sugestoes.append((distancia, candidato))
+
+        # Ordena por distância e pega as 10 melhores
+        sugestoes.sort(key=lambda x: x[0])
+        return [s[1] for s in sugestoes[:10]]
+
+    def distancia_levenshtein_otimizada(self, s1, s2):
+        """Versão otimizada do cálculo de distância de Levenshtein"""
+        if len(s1) < len(s2):
+            return self.distancia_levenshtein_otimizada(s2, s1)
+
+        if len(s2) == 0:
+            return len(s1)
+
+        previous_row = range(len(s2) + 1)
+        for i, c1 in enumerate(s1):
+            current_row = [i + 1]
+            for j, c2 in enumerate(s2):
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                current_row.append(min(insertions, deletions, substitutions))
+
+            # Otimização: se a menor distância na linha atual for maior que 2, podemos parar
+            if min(current_row) > 2:
+                return current_row[-1]
+
+            previous_row = current_row
+
+        return previous_row[-1]
+
+    def distancia_levenshtein(self, s1, s2):
+        """Calcula a distância de Levenshtein entre duas strings"""
+        if len(s1) < len(s2):
+            return self.distancia_levenshtein(s2, s1)
+
+        if len(s2) == 0:
+            return len(s1)
+
+        previous_row = range(len(s2) + 1)
+        for i, c1 in enumerate(s1):
+            current_row = [i + 1]
+            for j, c2 in enumerate(s2):
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                current_row.append(min(insertions, deletions, substitutions))
+            previous_row = current_row
+
+        return previous_row[-1]
+
+    def criar_menu_correcao(self, event, texto_widget):
+        """Cria menu específico para correção ortográfica"""
+        if hasattr(self, '_context_menu') and self._context_menu.winfo_exists():
+            self._context_menu.destroy()
+
+        menu = tk.Menu(texto_widget, tearoff=0)
+        self._context_menu = menu
+
+        # Obtém sugestões de correção
+        sugestoes = self.obter_sugestoes(self.palavra_errada)
+
+        if sugestoes:
+            menu.add_command(label=f"Corrigir '{self.palavra_errada}' para:")
+            menu.add_separator()
+            for sugestao in sugestoes[:10]:  # Limita a 10 sugestões
+                menu.add_command(
+                    label=sugestao,
+                    command=lambda s=sugestao: self.corrigir_palavra(texto_widget, s))
+        else:
+            menu.add_command(label="Nenhuma sugestão disponível", state=tk.DISABLED)
+
+        menu.add_separator()
+        menu.add_command(label="Ignorar", command=lambda: self.ignorar_erro(texto_widget))
+        menu.add_command(label="Adicionar ao dicionário",
+                        command=lambda: self.adicionar_ao_dicionario(self.palavra_errada.lower()))
+
+        # Exibe o menu
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+            texto_widget.bind("<Button-1>", lambda e: menu.destroy(), add="+")
+            menu.bind("<Unmap>", lambda e: texto_widget.unbind("<Button-1>"))
+        finally:
+            pass
+
+    def fechar_menu(self, event=None):
+        """Fecha o menu de contexto se estiver ativo."""
+        if hasattr(self, 'menu_ativo') and self.menu_ativo:
+            self.menu_ativo.destroy()
+            self.menu_ativo = None
+
+    def corrigir_palavra(self, texto_widget, sugestao):
+        """Substitui a palavra errada pela sugestão selecionada"""
+        if hasattr(self, 'posicao_erro') and self.posicao_erro:
+            start, end = self.posicao_erro
+
+            # Preserva a capitalização original
+            if self.palavra_errada.isupper():
+                sugestao = sugestao.upper()
+            elif self.palavra_errada[0].isupper():
+                sugestao = sugestao.capitalize()
+
+            # Substitui a palavra
+            texto_widget.delete(start, end)
+            texto_widget.insert(start, sugestao)
+
+            # Remove a marcação de erro
+            texto_widget.tag_remove("erro_ortografico", start, f"{start}+{len(sugestao)}c")
+
+            # Atualiza a lista de erros para este widget específico
+            if texto_widget in self.erros_widgets and (start, end) in self.erros_widgets[texto_widget]:
+                del self.erros_widgets[texto_widget][(start, end)]
+
+            self.fechar_menu()
+
+    def ignorar_erro(self, texto_widget):
+        """Remove a marcação de erro da palavra selecionada e a adiciona à lista de ignoradas"""
+        if hasattr(self, 'posicao_erro') and self.posicao_erro:
+            start, end = self.posicao_erro
+            palavra = texto_widget.get(start, end)
+
+            # Adiciona a palavra à lista de ignoradas (em minúsculas para comparação case-insensitive)
+            self.palavras_ignoradas.add(palavra.lower())
+
+            texto_widget.tag_remove("erro_ortografico", start, end)
+
+            # Atualiza a lista de erros para este widget específico
+            if texto_widget in self.erros_widgets and (start, end) in self.erros_widgets[texto_widget]:
+                del self.erros_widgets[texto_widget][(start, end)]
+
+            self.fechar_menu()
+
+    def adicionar_ao_dicionario(self, palavra):
+        """Adiciona uma palavra ao dicionário do usuário e ao arquivo pt_BR.dic"""
+        palavra = palavra.lower()
+        if palavra not in self.dicionario:
+            self.dicionario.add(palavra)
+            print(f"Palavra '{palavra}' adicionada ao dicionário.")
+
+            # Adiciona ao arquivo pt_BR.dic garantindo nova linha
+            try:
+                pt_br_dic = self.dicionario_dir / "pt_BR.dic"
+
+                # Verifica se o arquivo termina com quebra de linha
+                needs_newline = False
+                if pt_br_dic.exists():
+                    with open(pt_br_dic, "rb") as f:
+                        try:  # Captura caso o arquivo esteja vazio
+                            f.seek(-1, 2)  # Vai para o último byte
+                            if f.read(1) != b'\n':
+                                needs_newline = True
+                        except:
+                            needs_newline = True
+
+                with open(pt_br_dic, "a", encoding="utf-8") as f:
+                    if needs_newline:
+                        f.write("\n")
+                    f.write(f"{palavra}")
+
+                print(f"Palavra '{palavra}' adicionada ao arquivo {pt_br_dic}")
+            except Exception as e:
+                print(f"Erro ao adicionar palavra ao arquivo: {e}")
+
+        self.fechar_menu()
+
+    def configurar_widget(self, texto_widget):
+        """Configura um widget de texto para usar o corretor ortográfico"""
+        if texto_widget not in self.erros_widgets:
+            self.erros_widgets[texto_widget] = {}
+
+        # Configura a tag para palavras erradas
+        texto_widget.tag_config("erro_ortografico", foreground="red", underline=True)
+
+        # Vincula eventos
+        texto_widget.bind("<KeyPress>", self.iniciar_verificacao_periodica)
+        texto_widget.bind("<FocusOut>", lambda e: self.parar_verificacao_periodica(e.widget))
+        texto_widget.bind("<F7>", lambda e: self.verificar_texto(texto_widget))
+        texto_widget.bind("<Button-3>", self.criar_menu_contexto)
+
+        self.verificacao_ativa = False
+
+    def verificar_palavra_atual(self, widget):
+        """Verifica a palavra na posição atual do cursor"""
+        pos = widget.index("insert")
+        inicio_palavra = widget.index(f"{pos} wordstart")
+        palavra = widget.get(inicio_palavra, pos).strip()
+
+        # Remove marcações antigas desta palavra
+        widget.tag_remove("erro_ortografico", inicio_palavra, pos)
+
+        # Verifica se a palavra está errada (com mais de 1 caractere)
+        if len(palavra) > 1 and palavra.lower() not in self.dicionario:
+            widget.tag_add("erro_ortografico", inicio_palavra, pos)
+            if widget not in self.erros_widgets:
+                self.erros_widgets[widget] = {}
+            self.erros_widgets[widget][(inicio_palavra, pos)] = palavra
+
+    def iniciar_verificacao_periodica(self, event):
+        """Inicia a verificação periódica se não estiver ativa"""
+        if not self.verificacao_ativa:
+            self.verificacao_ativa = True
+            self.verificar_periodicamente(event.widget)
+
+    def parar_verificacao_periodica(self, widget):
+        """Para a verificação periódica"""
+        self.verificacao_ativa = False
+
+    def verificar_periodicamente(self, widget):
+        """Verifica o texto periodicamente enquanto estiver sendo editado"""
+        if self.verificacao_ativa:
+            self.verificar_texto(widget)
+            self.root.after(1000, lambda: self.verificar_periodicamente(widget))
+
+    def _verificar_palavra_apos_digitacao(self, widget):
+        """Realiza a verificação ortográfica após o usuário parar de digitar"""
+        pos = widget.index("insert")
+        inicio_palavra = widget.index(f"{pos} wordstart")
+        palavra = widget.get(inicio_palavra, pos)
+
+        if len(palavra) > 1 and palavra.lower() not in self.dicionario:
+            widget.tag_add("erro_ortografico", inicio_palavra, pos)
+            self.erros[(inicio_palavra, pos)] = palavra
+        else:
+            widget.tag_remove("erro_ortografico", inicio_palavra, pos)
+            if (inicio_palavra, pos) in self.erros:
+                del self.erros[(inicio_palavra, pos)]
+
+        self.after_id_verificacao = None
+
+    def is_palavra_valida(self, texto):
+        """Verifica se o texto é uma palavra válida para verificação ortográfica"""
+        # Ignora números puros
+        if texto.isdigit():
+            return False
+
+        # Remove pontuação no final da palavra
+        palavra = texto.rstrip('.,;:?!)"\'')
+
+        # Verifica se tem pelo menos uma letra
+        return any(c.isalpha() for c in palavra)
 
 if __name__ == "__main__":
     root = tk.Tk()
