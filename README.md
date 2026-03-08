@@ -10,7 +10,9 @@ Há, mesmo usando Linux, fiz o código multiplataforma, testei no Linux e Window
 Código criado com o Linux, Kete e em Python 3.11 - 3.14 valeu comunidades!!
 
 
-Para gerar o executável é só ter o python e o pyinstaller instalados e no terminal e executar este comando:
+Para gerar o executável é só ter o python e no terminal e executar este comando:
+
+1ª - Opção cxfreeze:
 
 source atendimento_venv/bin/activate
 
@@ -22,7 +24,17 @@ pip install -r requirements.txt
 
 cxfreeze atendimentos.py --target-dir atendimentos_v2
 
-Ou usar pyinstaller
+////////////////////////
+
+2ª - opção pyinstaller:
+
+source atendimento_venv/bin/activate
+
+source atendimento_venv/bin/activate
+
+pip install --upgrade pip
+
+pip install -r requirements.txt
 
 pyinstaller --onefile --add-data "dicionario:dicionario" --windowed atendimentos.py
 
