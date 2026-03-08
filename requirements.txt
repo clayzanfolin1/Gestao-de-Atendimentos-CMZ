@@ -1,0 +1,14 @@
+altgraph==0.17.5
+cx_Freeze==8.6.0
+filelock==3.25.0
+freeze-core==0.6.0
+idna==3.11
+packaging==26.0
+patchelf==0.17.2.4
+pillow==12.1.1
+pyinstaller==6.19.0
+pyinstaller-hooks-contrib==2026.2
+setuptools==82.0.0
+style==1.1.0
+ttkbootstrap==1.20.1
+update==0.0.1
